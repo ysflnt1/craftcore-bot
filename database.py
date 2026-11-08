@@ -87,7 +87,7 @@ class PostgresConnection:
         self._psycopg = psycopg
         self._dict_row = dict_row
         self._dsn = dsn
-        self._connection = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=15)
+        self._connection = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=15, autocommit=True)
         self._last_rowcount = -1
         self._closed = False
 
@@ -115,12 +115,16 @@ class PostgresConnection:
                 table_info.group(1).lower(),
             )
         if "FROM SQLITE_MASTER" in upper:
-            statement = re.sub(
-                r"SELECT\s+1\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'\s+AND\s+name\s*=\s*\?",
-                "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=?",
+            master = re.search(
+                r"SELECT\s+1\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'\s+AND\s+name\s*=\s*(\?|['\"][^'\"]+['\"])",
                 statement,
                 flags=re.I,
             )
+            if master:
+                statement = (
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema=current_schema() AND table_name=" + master.group(1)
+                )
 
         if upper.startswith("SELECT CHANGES()"):
             return "__CRAFTCORE_CHANGES__", False, None
@@ -228,6 +232,26 @@ class PostgresConnection:
             self.rollback()
             raise
 
+    def executemany(self, sql: str, seq_of_parameters):
+        statement, ignore, pragma_parameter = self._normalise(sql)
+        if statement == "":
+            return Cursor(special_rows=[], rowcount=0)
+        if pragma_parameter is not None or statement == "__CRAFTCORE_CHANGES__":
+            raise sqlite3.OperationalError("executemany is not supported for this database command.")
+        if ignore and not re.search(r"\bON\s+CONFLICT\b", statement, re.I):
+            statement = statement.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+        cursor = self._connection.cursor()
+        try:
+            cursor.executemany(statement, [tuple(row) for row in seq_of_parameters])
+            self._last_rowcount = cursor.rowcount
+            return Cursor(cursor=cursor, rowcount=cursor.rowcount)
+        except self._psycopg.IntegrityError as exc:
+            cursor.close()
+            raise sqlite3.IntegrityError(str(exc)) from exc
+        except self._psycopg.DatabaseError as exc:
+            cursor.close()
+            raise sqlite3.OperationalError(str(exc)) from exc
+
     def ensure_casefold_indexes(self):
         statements = (
             "CREATE UNIQUE INDEX IF NOT EXISTS teams_name_ci_idx ON teams (LOWER(name))",
@@ -313,6 +337,9 @@ class PostgresConnection:
         self._closed = True
 
     def __enter__(self):
+        from psycopg.pq import TransactionStatus
+        if self._connection.info.transaction_status == TransactionStatus.IDLE:
+            self._connection.execute("BEGIN")
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -326,9 +353,13 @@ class PostgresConnection:
 def connect_database(database_url: str | None, sqlite_path: str):
     if database_url:
         log.info("Connecting to the configured PostgreSQL database.")
-        return PostgresConnection(database_url)
+        connection = PostgresConnection(database_url)
+        return connection
+    if os.getenv("REQUIRE_DATABASE_URL", "").lower() in ("1", "true", "yes"):
+        raise RuntimeError(
+            "DATABASE_URL is required for this Render deployment. Configure the Render Postgres connection before starting the bot."
+        )
     log.warning("DATABASE_URL is not set; using local SQLite at %s.", sqlite_path)
     connection = sqlite3.connect(sqlite_path)
     connection.row_factory = sqlite3.Row
-    connection.is_postgres = False
     return connection

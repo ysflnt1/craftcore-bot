@@ -125,6 +125,14 @@ class ResultConfirm(OwnerConfirm):
                                   interaction.user.id,True,self.forfeit_team,self.disqualified_team)
             await self.mod.sync_tournament_bracket()
         except ValueError as ex:return await interaction.response.edit_message(content=f"Result not saved: {ex}",embed=None,view=None)
+        updated=tc.get_match(self.mod.db,self.key)
+        if updated and updated.get("legacy_match_id"):
+            await self.mod.refresh_pred_message(updated["legacy_match_id"])
+            if updated["status"]=="completed":
+                await self.mod.post_result(updated["legacy_match_id"])
+        publish=getattr(self.mod,"publish_tournament_announcement",None)
+        if publish and self.winner is not None:
+            await publish("match_result",f"Match result · {team_name(self.mod.db,self.winner)} win",f"{team_name(self.mod.db,self.winner)} won {self.key} and advanced.")
         await interaction.response.edit_message(content=f"✅ Saved. Downstream match records were reset and affected wagers refunded: {', '.join(cleared) if cleared else 'none'}.",embed=None,view=None)
     @discord.ui.button(label="Cancel",style=discord.ButtonStyle.secondary)
     async def cancel(self,interaction,button):
@@ -299,6 +307,9 @@ def install(mod):
         except tc.DownstreamResultsExist as ex:
             return await interaction.response.send_message(f"Undoing **{match_key.value}** clears completed downstream results: **{', '.join(ex.match_keys)}**. Confirm?",view=ResultConfirm(mod,interaction.user.id,match_key.value,None,None,None,"normal",None),ephemeral=True)
         except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
+        updated=tc.get_match(mod.db,match_key.value)
+        if updated and updated.get("legacy_match_id"):
+            await mod.refresh_pred_message(updated["legacy_match_id"])
         await interaction.response.send_message(f"✅ Cleared {match_key.value}. Downstream cleared: {', '.join(cleared) if cleared else 'none'}.",ephemeral=True)
     @bg.command(name="history",description="Staff: view match result change history")
     @app_commands.choices(match_key=MATCHES)

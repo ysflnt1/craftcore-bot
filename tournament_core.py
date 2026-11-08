@@ -521,6 +521,8 @@ def import_teams(db,rows,actor=None):
                 seen_seeds.add(seed)
             parsed.append((n,p1,p2,seed))
         except Exception as e: raise ValueError(f"Import row {i}: {e}") from e
+    if db.execute("SELECT COUNT(*) FROM cc_bracket_matches").fetchone()[0]:
+        raise ValueError("Team imports are closed after the fixed bracket has been initialised.")
     if len(teams(db))+len([x for x in parsed if not team(db,x[0])])>16: raise ValueError("A single tournament supports exactly 16 teams.")
     add=[]
     for n,p1,p2,seed in parsed:
@@ -531,9 +533,15 @@ def import_teams(db,rows,actor=None):
     count=0
     try:
         with db:
+            occupied_slots={r["bracket_slot"] for r in db.execute("SELECT bracket_slot FROM cc_tournament_teams WHERE bracket_slot IS NOT NULL")}
+            occupied_seeds={r["seed"] for r in db.execute("SELECT seed FROM cc_tournament_teams WHERE seed IS NOT NULL")}
             for n,p1,p2,seed in add:
-                cur=db.execute("INSERT INTO cc_tournament_teams(name,seed,created_at) VALUES(?,?,?)",(n,seed,now())); tid=cur.lastrowid
-                db.executemany("INSERT INTO cc_tournament_players(username,team_id,slot) VALUES(?,?,?)",((p1,tid,1),(p2,tid,2))); count+=1
+                slot=next((x for x in range(1,17) if x not in occupied_slots),None)
+                if slot is None:raise ValueError("No fixed bracket slot is available.")
+                if seed is None:seed=next((x for x in range(1,17) if x not in occupied_seeds),slot)
+                cur=db.execute("INSERT INTO cc_tournament_teams(name,seed,bracket_slot,created_at) VALUES(?,?,?,?)",(n,seed,slot,now())); tid=cur.lastrowid
+                db.executemany("INSERT INTO cc_tournament_players(username,team_id,slot) VALUES(?,?,?)",((p1,tid,1),(p2,tid,2)))
+                occupied_slots.add(slot);occupied_seeds.add(seed);count+=1
             audit(db,"teams_imported",{"added":count,"already_present":len(parsed)-count},actor)
     except sqlite3.IntegrityError as e: raise ValueError("Import cancelled: team, username, or seed already exists.") from e
     return count

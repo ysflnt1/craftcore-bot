@@ -435,3 +435,80 @@ def set_wallet_frozen(db,user_id,frozen,actor=None):
         db.execute("INSERT INTO cc_wallet_controls(user_id,frozen,updated_by,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET frozen=excluded.frozen,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
             (user_id,1 if frozen else 0,actor,now()))
         audit(db,"wallet_frozen" if frozen else "wallet_unfrozen",{"user_id":user_id},actor)
+
+
+def set_legacy_team_id(db,team_id,legacy_team_id):
+    with db:
+        db.execute("UPDATE cc_tournament_teams SET legacy_team_id=? WHERE id=?",(legacy_team_id,team_id))
+
+def set_legacy_match_id(db,match_key,legacy_match_id):
+    with db:
+        db.execute("UPDATE cc_bracket_matches SET legacy_match_id=? WHERE match_key=?",(legacy_match_id,match_key))
+
+def sync_legacy_result(db,legacy_match_id,legacy_winner_id,forfeit_legacy_id=None,score_a=None,score_b=None,actor=None):
+    row=db.execute("SELECT * FROM cc_bracket_matches WHERE legacy_match_id=?",(legacy_match_id,)).fetchone()
+    if not row:
+        return False
+    winner=db.execute("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?",(legacy_winner_id,)).fetchone()
+    if not winner:
+        raise ValueError("Legacy winning team is not linked to a tournament team.")
+    forfeiter=None
+    result_type="normal"
+    if forfeit_legacy_id is not None:
+        forfeiter=db.execute("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?",(forfeit_legacy_id,)).fetchone()
+        if not forfeiter:
+            raise ValueError("Legacy forfeiting team is not linked to a tournament team.")
+        result_type="forfeit"
+    set_result(db,row["match_key"],winner["id"],score_a,score_b,result_type,
+               actor=actor,forfeit_team=forfeiter["id"] if forfeiter else None)
+    return True
+
+def open_dispute(db,key,raised_by,reason,previous_legacy_status=None):
+    if key not in KEYS or not get_match(db,key):
+        raise ValueError("Unknown bracket match.")
+    reason=clean(reason,"Dispute reason",500)
+    if db.execute("SELECT 1 FROM cc_match_disputes WHERE match_key=? AND status='open'",(key,)).fetchone():
+        raise ValueError("This match already has an open dispute.")
+    if get_match(db,key)["status"]=="completed":
+        raise ValueError("This match has already been settled. A completed result cannot be disputed through this command.")
+    with db:
+        cur=db.execute("INSERT INTO cc_match_disputes(match_key,raised_by,reason,status,previous_legacy_status,created_at) VALUES(?,?,?,'open',?,?)",(key,raised_by,reason,previous_legacy_status,now()))
+        audit(db,"match_dispute_opened",{"match_key":key,"dispute_id":cur.lastrowid,"reason":reason},raised_by)
+    return cur.lastrowid
+
+def resolve_dispute(db,key,resolved_by,resolution):
+    resolution=clean(resolution,"Resolution",500)
+    row=db.execute("SELECT * FROM cc_match_disputes WHERE match_key=? AND status='open' ORDER BY id DESC LIMIT 1",(key,)).fetchone()
+    if not row:
+        raise ValueError("There is no open dispute for that match.")
+    with db:
+        db.execute("UPDATE cc_match_disputes SET status='resolved',resolved_by=?,resolution=?,resolved_at=? WHERE id=?",(resolved_by,resolution,now(),row["id"]))
+        audit(db,"match_dispute_resolved",{"match_key":key,"dispute_id":row["id"],"resolution":resolution},resolved_by)
+    return dict(row)
+
+def dispute_history(db,key):
+    if key not in KEYS:
+        raise ValueError("Unknown bracket match.")
+    return [dict(r) for r in db.execute("SELECT * FROM cc_match_disputes WHERE match_key=? ORDER BY id DESC",(key,))]
+
+def assign_referee(db,key,referee,actor=None):
+    if not get_match(db,key):
+        raise ValueError("Unknown bracket match.")
+    referee=clean(referee,"Referee",80)
+    with db:
+        old=get_match(db,key)
+        db.execute("UPDATE cc_bracket_matches SET referee=?,updated_at=? WHERE match_key=?",(referee,now(),key))
+        audit(db,"referee_assigned",{"match_key":key,"before":old["referee"],"after":referee},actor)
+
+def draft_history(db,key,limit=20):
+    if key not in KEYS:
+        raise ValueError("Unknown match ID.")
+    rows=db.execute("SELECT * FROM cc_audit_log WHERE action IN ('draft_selection','draft_undo') ORDER BY id DESC").fetchall()
+    out=[]
+    for row in rows:
+        detail=json.loads(row["details"])
+        if detail.get("match")==key or detail.get("match_key")==key:
+            out.append({**dict(row),"details_parsed":detail})
+            if len(out)>=max(1,min(limit,50)):
+                break
+    return out

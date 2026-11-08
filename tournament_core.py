@@ -126,6 +126,16 @@ def ensure_schema(db):
         actor_id INTEGER,
         created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS cc_champion_prize_claims(
+        username TEXT PRIMARY KEY COLLATE NOCASE,
+        team_id INTEGER NOT NULL,
+        discord_id INTEGER NOT NULL,
+        claim_status TEXT NOT NULL DEFAULT 'unclaimed'
+            CHECK(claim_status IN ('unclaimed','claimed','delivered')),
+        claimed_at TEXT,
+        delivery_confirmed_by INTEGER,
+        delivery_confirmed_at TEXT
+    );
     """)
     # Safe additive migrations for columns added after the initial deployment.
     migrations = {

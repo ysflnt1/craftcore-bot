@@ -31,4 +31,4 @@ jobs:
       - name: Install test runner
         run: pip install pytest
       - name: Run tests
-        run: pytest -q
+        run: PYTHONPATH=. pytest -q

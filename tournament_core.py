@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 
@@ -33,7 +34,7 @@ KEYS = {d[0] for d in DEFS}
 class DownstreamResultsExist(ValueError):
     def __init__(self, keys):
         self.match_keys = keys
-        super().__init__("Completed downstream matches need confirmation before they are cleared.")
+        super().__init__("Downstream match results, betting panels or drafts need confirmation before they are reset.")
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -238,6 +239,54 @@ def refresh(db):
     gf=get_match(db,"GF")
     if gf["winner_team_id"] is None: db.execute("DELETE FROM cc_tournament_settings WHERE key='champion_team_id'")
     else: db.execute("INSERT INTO cc_tournament_settings(key,value) VALUES('champion_team_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(gf["winner_team_id"]),))
+def _coin_ledger(db,user_id,delta,reason,match_id=None):
+    row=db.execute("SELECT balance FROM players WHERE user_id=?",(user_id,)).fetchone()
+    if not row:
+        raise ValueError(f"Cannot adjust missing CraftCoin wallet {user_id}.")
+    db.execute("INSERT INTO cc_coin_transactions(user_id,delta,balance_after,reason,match_id,created_at) VALUES(?,?,?,?,?,?)",
+               (user_id,int(delta),int(row["balance"]),reason,match_id,now()))
+
+def _void_legacy_match(db,legacy_id,reason):
+    legacy=db.execute("SELECT * FROM matches WHERE id=?",(legacy_id,)).fetchone()
+    if not legacy or legacy["status"]=="cancelled":
+        return
+    bets=db.execute("SELECT * FROM bets WHERE match_id=?",(legacy_id,)).fetchall()
+    for bet in bets:
+        delta=(bet["amount"]-bet["payout"]) if bet["settled"] else bet["amount"]
+        balance=db.execute("SELECT balance FROM players WHERE user_id=?",(bet["user_id"],)).fetchone()
+        if not balance:
+            raise ValueError("A wager wallet is missing; refusing to invalidate this match.")
+        if balance["balance"]+delta<0:
+            raise ValueError("A downstream winner has already spent some payout. Staff must restore that wallet before invalidating this match.")
+        if delta:
+            db.execute("UPDATE players SET balance=balance+? WHERE user_id=?",(delta,bet["user_id"]))
+            _coin_ledger(db,bet["user_id"],delta,reason,legacy_id)
+        db.execute("UPDATE bets SET settled=1,payout=amount WHERE match_id=? AND user_id=?",(legacy_id,bet["user_id"]))
+    db.execute("UPDATE matches SET status='cancelled',winner=NULL,forfeit_team=NULL WHERE id=?",(legacy_id,))
+
+def _settle_legacy_match(db,legacy_id,winner_legacy_id,forfeit_legacy_id=None):
+    legacy=db.execute("SELECT * FROM matches WHERE id=?",(legacy_id,)).fetchone()
+    if not legacy:
+        raise ValueError("Linked legacy match record is missing.")
+    if legacy["status"]=="cancelled":
+        raise ValueError("This match was cancelled and its wagers were refunded. Recreate it before recording a result.")
+    multiplier=float(os.getenv("WIN_MULTIPLIER","1.5"))
+    bets=db.execute("SELECT * FROM bets WHERE match_id=?",(legacy_id,)).fetchall()
+    for bet in bets:
+        payout=int(round(bet["amount"]*multiplier)) if bet["team_id"]==winner_legacy_id else 0
+        delta=(payout-bet["payout"]) if bet["settled"] else payout
+        balance=db.execute("SELECT balance FROM players WHERE user_id=?",(bet["user_id"],)).fetchone()
+        if not balance:
+            raise ValueError("A wager wallet is missing; cannot settle this match.")
+        if balance["balance"]+delta<0:
+            raise ValueError("Correcting this result would make a wallet negative. Staff must reconcile the wallet first.")
+        if delta:
+            db.execute("UPDATE players SET balance=balance+? WHERE user_id=?",(delta,bet["user_id"]))
+            _coin_ledger(db,bet["user_id"],delta,"bet_result_correction" if bet["settled"] else "bet_payout",legacy_id)
+        db.execute("UPDATE bets SET settled=1,payout=? WHERE match_id=? AND user_id=?",(payout,legacy_id,bet["user_id"]))
+    db.execute("UPDATE matches SET status='done',winner=?,forfeit_team=? WHERE id=?",
+               (winner_legacy_id,forfeit_legacy_id,legacy_id))
+
 def snapshot(m):
     return {k:m[k] for k in ("winner_team_id","score_a","score_b","result_type","referee","status","forfeit_team_id","disqualified_team_id")}
 def set_result(db,key,winner,score_a=None,score_b=None,result_type="normal",referee=None,actor=None,confirm=False,forfeit_team=None,disqualified_team=None):

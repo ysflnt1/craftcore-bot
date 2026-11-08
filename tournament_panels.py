@@ -153,7 +153,7 @@ class PanelSelect(discord.ui.Select):
     def __init__(self,mod):
         self.mod=mod
         super().__init__(placeholder="Open a tournament panel…",min_values=1,max_values=1,
-            options=[discord.SelectOption(label=label,title=label,value=key) for key,label in PANEL_KEYS],
+            options=[discord.SelectOption(label=label,value=key) for key,label in PANEL_KEYS],
             custom_id="craftcore:panels:navigate")
     async def callback(self,interaction):
         await interaction.response.send_message(embed=panel_embed(self.mod,self.values[0],interaction.user.id),

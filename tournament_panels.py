@@ -27,8 +27,9 @@ def _setting(db,key,default):
     return row["value"] if row else default
 
 def _coin_metrics(mod):
-    linked=mod.db.execute("""SELECT p.user_id,p.balance,l.username FROM players p
-                             JOIN cc_discord_links l ON l.discord_id=p.user_id""").fetchall()
+    linked=mod.db.execute("""SELECT p.user_id,p.balance,
+                                 COALESCE(l.username,'Discord ' || CAST(p.user_id AS TEXT)) AS username
+                                 FROM players p LEFT JOIN cc_discord_links l ON l.discord_id=p.user_id""").fetchall()
     output=[]
     for row in linked:
         bets=mod.db.execute("""SELECT b.amount,b.payout,m.status FROM bets b
@@ -116,13 +117,13 @@ def panel_embed(mod,key,user_id=None):
         e.description="\n\n".join(lines)[:4000] or "No match drafts have started."
         e.set_footer(text="Use /draft start, /draft view, /draft undo or /draft override.")
     elif key=="coins":
-        e.description="Participant wallets start at 100 CraftCoins. A correct prediction returns 1.5x the stake in total, including the original stake."
+        e.description="Any Discord server member can create a CraftCoin wallet starting at 100 CraftCoins. A correct prediction returns 1.5x the stake in total, including the original stake."
         if user_id:
+            wallet=mod.ensure_player(user_id)
             link=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(user_id,)).fetchone()
-            wallet=mod.get_player(user_id)
-            if link and wallet:
+            if wallet:
                 pending=mod.pending_total(user_id)
-                e.add_field(name="Your linked account",value=link["username"],inline=True)
+                e.add_field(name="Your account",value=link["username"] if link else f"Discord user {user_id}",inline=True)
                 e.add_field(name="Balance",value=f"{wallet['balance']} CC",inline=True)
                 e.add_field(name="Currently wagered",value=f"{pending} CC",inline=True)
                 tx=tc.coin_history(mod.db,user_id,5)
@@ -133,7 +134,7 @@ def panel_embed(mod,key,user_id=None):
                 e.add_field(name="Betting record",value=f"{wins} wins · {len(completed)-wins} losses · {round(100*wins/len(completed),1) if completed else 0}% accuracy · net {profit:+} CC",inline=False)
                 tx=tc.coin_history(mod.db,user_id,5)
                 e.add_field(name="Recent transactions",value="\n".join(f"{x['delta']:+} · {x['reason']} · balance {x['balance_after']}" for x in tx) or "No transactions.",inline=False)
-            else:e.add_field(name="Wallet",value="Your Discord account is not linked to a tournament Minecraft username.",inline=False)
+            else:e.add_field(name="Wallet",value="Your CraftCoin wallet could not be loaded.",inline=False)
         e.set_footer(text="Use /coins balance, /coins history, /coins leaderboard and /mybets.")
     elif key=="leaderboard":
         metrics=_coin_metrics(mod)

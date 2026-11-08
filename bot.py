@@ -436,10 +436,11 @@ async def finish_match(mid, winner, forfeit_team=None):
     try:
         import tournament_core
         wa, wb = game_wins(mid)
+        has_score = forfeit_team is None and wa != wb
         tournament_core.sync_legacy_result(
             db, mid, winner, forfeit_team,
-            None if forfeit_team is not None else wa,
-            None if forfeit_team is not None else wb,
+            wa if has_score else None,
+            wb if has_score else None,
         )
         sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
         if sync_bracket:

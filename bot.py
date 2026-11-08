@@ -623,6 +623,9 @@ async def setup_cmd(
     cfg_set("predictions_channel", predictions_channel.id)
     if staff_role:
         cfg_set("staff_role", staff_role.id)
+    sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+    if sync_bracket:
+        await sync_bracket()
     await interaction.response.send_message(
         f"✅ Results → {results_channel.mention}\n"
         f"✅ Predictions → {predictions_channel.mention}"

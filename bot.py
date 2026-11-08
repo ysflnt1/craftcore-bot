@@ -293,8 +293,20 @@ def result_embed(mid, stats=None):
             f"  *(opponent forfeited)*" if m["forfeit_team"] else f"  ({wa} - {wb})"
         ),
     )
-    e.add_field(name=a, value=f"<@{ra['p1']}> + <@{ra['p2']}>", inline=True)
-    e.add_field(name=b, value=f"<@{rb['p1']}> + <@{rb['p2']}>", inline=True)
+    cc_a = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (m["team_a"],))
+    cc_b = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (m["team_b"],))
+    if cc_a:
+        pa = [x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot", (cc_a["id"],))]
+        label_a = " + ".join(pa)
+    else:
+        label_a = f"<@{ra['p1']}> + <@{ra['p2']}>"
+    if cc_b:
+        pb = [x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot", (cc_b["id"],))]
+        label_b = " + ".join(pb)
+    else:
+        label_b = f"<@{rb['p1']}> + <@{rb['p2']}>"
+    e.add_field(name=a, value=label_a, inline=True)
+    e.add_field(name=b, value=label_b, inline=True)
     e.add_field(name="Draft", value=draft_text(mid, with_next=False)[:1024], inline=False)
     games = q("SELECT * FROM games WHERE match_id=? ORDER BY game_no", (mid,))
     if games:

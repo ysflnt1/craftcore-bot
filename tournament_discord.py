@@ -274,6 +274,8 @@ def install(mod):
         try:
             tid=int(winner);cleared=tc.set_result(mod.db,match_key.value,tid,score_a,score_b,result_type.value,referee,interaction.user.id)
             await mod.sync_tournament_bracket()
+            if getattr(mod,"publish_tournament_announcement",None):
+                await mod.publish_tournament_announcement("match_result",f"Match result · {team_name(mod.db,tid)} win",f"{team_name(mod.db,tid)} won {match_key.value} and advanced.")
         except tc.DownstreamResultsExist as ex:
             detail=", ".join(f"{k} ({next(x[2] for x in tc.DEFS if x[0]==k)})" for k in ex.match_keys)
             return await interaction.response.send_message(f"⚠️ This resets downstream results/drafts and refunds their wagers: **{detail}**. Confirm to continue.",view=ResultConfirm(mod,interaction.user.id,match_key.value,tid,score_a,score_b,result_type.value,referee),ephemeral=True)
@@ -637,6 +639,8 @@ def install(mod):
                 tid=int(winner)
                 cleared=tc.set_result(mod.db,match_key.value,tid,score_a,score_b,result_type.value,referee,interaction.user.id)
                 await mod.sync_tournament_bracket()
+                if getattr(mod,"publish_tournament_announcement",None):
+                    await mod.publish_tournament_announcement("match_result",f"Match result · {team_name(mod.db,tid)} win",f"{team_name(mod.db,tid)} won {match_key.value} and advanced.")
             except tc.DownstreamResultsExist as ex:
                 detail=", ".join(ex.match_keys)
                 return await interaction.response.send_message(

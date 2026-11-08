@@ -162,7 +162,7 @@ def install(mod):
             mod.BetModal(self.match_id, self.side)
         )
 
-    # Replace the original participant-only betting button callback.
+    # Replace the original betting button callback with open server access.
     mod.BetButton.callback = public_bet_button_callback
 
     async def public_balance(interaction: discord.Interaction,
@@ -204,7 +204,7 @@ def install(mod):
         player = ensure_player(interaction.user.id)
         if not player:
             return await interaction.response.send_message(
-                "You need to be linked to a registered Minecraft participant before using a CraftCoin wallet.",
+                "Your CraftCoin wallet could not be loaded. Please try again.",
                 ephemeral=True,
             )
         pending = mod.pending_total(interaction.user.id)

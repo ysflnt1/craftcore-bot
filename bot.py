@@ -399,7 +399,10 @@ async def finish_match(mid, winner, forfeit_team=None):
     """Atomically record a match result and settle every outstanding wager once."""
     db.execute("BEGIN IMMEDIATE")
     try:
-        match_data = get_match(mid)
+        if getattr(db, "is_postgres", False):
+            match_data = db.execute("SELECT * FROM matches WHERE id=? FOR UPDATE", (mid,)).fetchone()
+        else:
+            match_data = get_match(mid)
         if not match_data or match_data["status"] in ("done", "cancelled"):
             raise ValueError("This match has already been completed or cancelled.")
         disputed = db.execute(

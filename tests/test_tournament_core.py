@@ -187,6 +187,51 @@ class TournamentCoreTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT status FROM matches WHERE id=?",(legacy_mid,)).fetchone()[0],"cancelled")
         self.assertIsNone(tc.get_match(self.db,"QF-L1")["legacy_match_id"])
 
+    def test_draft_override_preserves_step_order_and_unique_modes(self):
+        self.initialise()
+        tc.draft_add(self.db, "R1-L1", tc.MODES[0])
+        tc.draft_add(self.db, "R1-L1", tc.MODES[1])
+        state = tc.draft_override(self.db, "R1-L1", 1, tc.MODES[2], 77)
+        self.assertEqual(state["selections"][0]["gamemode"], tc.MODES[2])
+        self.assertEqual(state["selections"][0]["action"], "ban")
+        with self.assertRaises(ValueError):
+            tc.draft_override(self.db, "R1-L1", 2, tc.MODES[2], 77)
+
+    def test_stats_and_giveaway_eligibility_follow_bracket_results(self):
+        self.initialise()
+        first = tc.get_match(self.db, "R1-L1")
+        losing_team = first["team_a_id"]
+        tc.set_result(self.db, "R1-L1", first["team_b_id"], result_type="forfeit",
+                      forfeit_team=losing_team)
+        for key, *_ in tc.DEFS:
+            if key == "R1-L1":
+                continue
+            match = tc.get_match(self.db, key)
+            tc.set_result(self.db, key, match["team_a_id"])
+        team_rows = tc.team_stats(self.db)
+        champion = next(x for x in team_rows if x["placement"] == 1)
+        runner_up = next(x for x in team_rows if x["placement"] == 2)
+        self.assertEqual(tc.get_match(self.db, "GF")["winner_team_id"], champion["id"])
+        self.assertGreaterEqual(champion["matches_played"], 4)
+        self.assertEqual(len(tc.player_stats(self.db)), 32)
+        eligible = tc.giveaway_eligibility(self.db)
+        excluded = [x for x in eligible if x["team"] == tc.name(self.db, losing_team)]
+        self.assertEqual(len(excluded), 2)
+        self.assertTrue(all(x["status"] == "ineligible" for x in excluded))
+        self.assertFalse(any(x["status"] == "pending" for x in eligible))
+        self.assertEqual(sum(x["status"] == "eligible" for x in eligible), 30)
+
+    def test_open_dispute_blocks_result_until_resolved(self):
+        self.initialise()
+        match = tc.get_match(self.db, "R1-L1")
+        dispute_id = tc.open_dispute(self.db, "R1-L1", 100, "Possible rule violation", "open")
+        with self.assertRaises(ValueError):
+            tc.set_result(self.db, "R1-L1", match["team_a_id"])
+        record = tc.resolve_dispute(self.db, "R1-L1", 200, "Reviewed evidence; resume match")
+        self.assertEqual(record["id"], dispute_id)
+        tc.set_result(self.db, "R1-L1", match["team_a_id"])
+        self.assertEqual(tc.dispute_history(self.db, "R1-L1")[0]["status"], "resolved")
+
     def test_bracket_backup_round_trip_and_validation(self):
         self.initialise()
         m = tc.get_match(self.db, "R1-L1")

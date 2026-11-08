@@ -92,6 +92,9 @@ class DraftSelect(discord.ui.Select):
         linked=tc.get_match(self.mod.db,self.key)
         if linked.get("legacy_match_id"):
             await self.mod.refresh_pred_message(linked["legacy_match_id"])
+        if s["complete"] and getattr(self.mod,"publish_tournament_announcement",None):
+            modes=", ".join(x["gamemode"] for x in s["selections"])
+            await self.mod.publish_tournament_announcement("draft_complete",f"Draft complete · {self.key}",f"The nine-step draft is complete: {modes}.")
         await interaction.response.edit_message(embed=draft_embed(self.mod.db,self.key),view=DraftView(self.mod,self.key) if not s["complete"] else None)
 
 class DraftView(discord.ui.View):
@@ -248,11 +251,17 @@ def install(mod):
     @tg.command(name="lock_registrations",description="Staff: lock team registrations and edits")
     @mod.staff_only
     async def lock_reg(interaction):
-        tc.set_locked(mod.db,True,interaction.user.id);await interaction.response.send_message("🔒 Registrations locked.",ephemeral=True)
+        tc.set_locked(mod.db,True,interaction.user.id)
+        if getattr(mod,"publish_tournament_announcement",None):
+            await mod.publish_tournament_announcement("registration","Registration closed","Tournament team registration is now locked.")
+        await interaction.response.send_message("🔒 Registrations locked.",ephemeral=True)
     @tg.command(name="unlock_registrations",description="Staff: reopen team registrations and edits")
     @mod.staff_only
     async def unlock_reg(interaction):
-        tc.set_locked(mod.db,False,interaction.user.id);await interaction.response.send_message("🟢 Registrations reopened.",ephemeral=True)
+        tc.set_locked(mod.db,False,interaction.user.id)
+        if getattr(mod,"publish_tournament_announcement",None):
+            await mod.publish_tournament_announcement("registration","Registration opened","Tournament team registration is now open.")
+        await interaction.response.send_message("🟢 Registrations reopened.",ephemeral=True)
 
     bg=app_commands.Group(name="bracket",description="Fixed Craftcore tournament bracket",guild_only=True);bot.tree.add_command(bg)
     @bg.command(name="view",description="View all 15 matches in the 16-team bracket")
@@ -556,6 +565,8 @@ def install(mod):
                 cur=mod.db.execute("INSERT INTO cc_giveaway_draws(username,discord_id,eligible_count,drawn_by,created_at) VALUES(?,?,?,?,?)",
                                    (winner["username"],winner["discord_id"],len(eligible),interaction.user.id,tc.now()))
                 tc.audit(mod.db,"giveaway_drawn",{"draw_id":cur.lastrowid,"username":winner["username"],"eligible_count":len(eligible)},interaction.user.id)
+            if getattr(mod,"publish_tournament_announcement",None):
+                await mod.publish_tournament_announcement("giveaway","Participant giveaway winner",f"{winner['username']} won the 1x Nitro Basic Wheel Spin from {len(eligible)} eligible players.")
             await interaction.response.send_message(
                 f"🎉 Participant giveaway winner: **{winner['username']}** — 1x Nitro Basic Wheel Spin. "
                 f"Drawn from {len(eligible)} eligible players. This is separate from the champion duo's 2x Nitro prize.",
@@ -574,6 +585,8 @@ def install(mod):
                 mod.db.execute("UPDATE cc_giveaway_draws SET claim_status='claimed',claimed_by=?,claimed_at=? WHERE id=?",
                                (interaction.user.id,tc.now(),draw["id"]))
                 tc.audit(mod.db,"giveaway_prize_claimed",{"draw_id":draw["id"],"username":draw["username"]},interaction.user.id)
+            if getattr(mod,"publish_tournament_announcement",None):
+                await mod.publish_tournament_announcement("prize_claim", "Giveaway prize claimed", f"{draw['username']} has claimed the participant giveaway prize. Staff delivery confirmation is still required.")
             await interaction.response.send_message("✅ Your Nitro Basic Wheel Spin claim has been recorded. Staff must confirm delivery separately.",ephemeral=True)
 
         @gg.command(name="confirm_delivery",description="Staff: confirm the participant giveaway prize was actually delivered")
@@ -586,6 +599,8 @@ def install(mod):
                 mod.db.execute("UPDATE cc_giveaway_draws SET claim_status='delivered',delivery_confirmed_by=?,delivery_confirmed_at=? WHERE id=?",
                                (interaction.user.id,tc.now(),draw["id"]))
                 tc.audit(mod.db,"giveaway_delivery_confirmed",{"draw_id":draw["id"],"username":draw["username"]},interaction.user.id)
+            if getattr(mod,"publish_tournament_announcement",None):
+                await mod.publish_tournament_announcement("prize_delivery", "Giveaway prize delivered", f"Staff confirmed delivery of the participant giveaway prize to {draw['username']}.")
             await interaction.response.send_message(f"✅ Delivery confirmed for **{draw['username']}**. The bot has not marked any prize delivered before this staff confirmation.",ephemeral=True)
 
     # Small one-tournament award table (for the Hall of Fame panel).

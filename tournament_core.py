@@ -572,7 +572,7 @@ def import_bracket(db,raw,actor=None):
     if not isinstance(supplied,list) or len(supplied)!=len(local): raise ValueError("Backup roster does not match current teams.")
     for t in supplied:
         x=local.get(t.get("id"))
-        if not x or any(x[k]!=t.get(k) for k in ("name","player1","player2")): raise ValueError("Backup contains invalid team IDs or identities.")
+        if not x or any(x[k]!=t.get(k) for k in ("name","player1","player2","bracket_slot")): raise ValueError("Backup contains invalid team IDs or identities.")
     items=obj.get("matches")
     if not isinstance(items,list) or len(items)!=15: raise ValueError("Backup must contain all 15 bracket matches.")
     mm={}
@@ -596,7 +596,28 @@ def import_bracket(db,raw,actor=None):
         if typ=="disqualification" and dt==win: raise ValueError(f"Disqualified team cannot be the winner in {key}.")
         if typ!="disqualification" and dt is not None: raise ValueError(f"Unexpected disqualified team in {key}.")
         if win is None and (x is not None or typ is not None or ft is not None or dt is not None): raise ValueError(f"Result data without winner in {key}.")
+    changed=set()
+    for key in KEYS:
+        old=get_match(db,key); it=mm[key]
+        fields=("winner_team_id","score_a","score_b","result_type","referee","forfeit_team_id","disqualified_team_id")
+        if any(old[field]!=it.get(field) for field in fields):
+            changed.add(key)
+        if old["winner_team_id"]!=it.get("winner_team_id"):
+            changed.update(descendants(key))
+    for key in changed:
+        old=get_match(db,key)
+        if db.execute("SELECT 1 FROM cc_match_disputes WHERE match_key=? AND status='open'",(key,)).fetchone():
+            raise ValueError(f"Cannot import backup while {key} has an open dispute.")
+        if old["legacy_match_id"] and db.execute("SELECT 1 FROM bets WHERE match_id=? LIMIT 1",(old["legacy_match_id"],)).fetchone():
+            raise ValueError(f"Cannot overwrite {key}: its legacy match has betting history. Resolve/correct that match through /match result first.")
     with db:
+        for key in changed:
+            old=get_match(db,key)
+            if old["legacy_match_id"]:
+                db.execute("UPDATE matches SET status='cancelled',winner=NULL,forfeit_team=NULL WHERE id=?",(old["legacy_match_id"],))
+                db.execute("DELETE FROM draft WHERE match_id=?",(old["legacy_match_id"],))
+                db.execute("UPDATE cc_bracket_matches SET legacy_match_id=NULL WHERE match_key=?",(key,))
+            db.execute("DELETE FROM cc_draft_selections WHERE match_key=?",(key,))
         for key,*_ in DEFS:
             it=mm[key]; old=get_match(db,key)
             db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(key,"backup_import",actor,json.dumps(snapshot(old),sort_keys=True),json.dumps(it,sort_keys=True),now()))

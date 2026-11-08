@@ -345,4 +345,33 @@ def install(mod):
                 mod.db.execute("DELETE FROM cc_discord_links WHERE username=? COLLATE NOCASE",(minecraft_username,))
                 tc.audit(mod.db,"discord_wallet_unlinked",{"username":minecraft_username,"discord_id":row["discord_id"]},interaction.user.id)
             await interaction.response.send_message(f"✅ Unlinked \`{minecraft_username}\`. Wallet and bet history preserved.",ephemeral=True)
-    log.info("Tournament teams, bracket, draft, and wallet-link commands installed.")
+    # CraftCoin history and wallet freeze controls complement the legacy /coins group.
+    cg=bot.tree.get_command("coins")
+    if isinstance(cg,app_commands.Group):
+        @cg.command(name="history",description="View your CraftCoin transaction history")
+        async def coins_history(interaction,member:Optional[discord.Member]=None):
+            target=member or interaction.user
+            if target.id!=interaction.user.id and not staff(mod,interaction):
+                return await interaction.response.send_message("Only staff can view another player's wallet history.",ephemeral=True)
+            if not mod.db.execute("SELECT 1 FROM cc_discord_links WHERE discord_id=?",(target.id,)).fetchone():
+                return await interaction.response.send_message("That Discord account is not linked to a tournament participant.",ephemeral=True)
+            rows=tc.coin_history(mod.db,target.id)
+            if not rows:return await interaction.response.send_message("No CraftCoin transactions recorded yet.",ephemeral=True)
+            lines=[f"{r['created_at']} · {r['delta']:+} · {r['reason']} · balance {r['balance_after']}" for r in rows]
+            await interaction.response.send_message(f"CraftCoin history · {target.display_name}\n"+"\n".join(lines)[:1800],ephemeral=True)
+
+        @cg.command(name="freeze",description="Staff: freeze a participant wallet and prevent new wagers")
+        @mod.staff_only
+        async def coins_freeze(interaction,member:discord.Member):
+            try:tc.set_wallet_frozen(mod.db,member.id,True,interaction.user.id)
+            except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
+            await interaction.response.send_message(f"Froze {member.mention}'s wallet. Existing balance and bets were not changed.",ephemeral=True)
+
+        @cg.command(name="unfreeze",description="Staff: unfreeze a participant wallet")
+        @mod.staff_only
+        async def coins_unfreeze(interaction,member:discord.Member):
+            try:tc.set_wallet_frozen(mod.db,member.id,False,interaction.user.id)
+            except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
+            await interaction.response.send_message(f"Unfroze {member.mention}'s wallet.",ephemeral=True)
+
+    log.info("Tournament teams, bracket, draft, wallet links and coin controls installed.")

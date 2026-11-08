@@ -239,22 +239,35 @@ def refresh(db):
     if gf["winner_team_id"] is None: db.execute("DELETE FROM cc_tournament_settings WHERE key='champion_team_id'")
     else: db.execute("INSERT INTO cc_tournament_settings(key,value) VALUES('champion_team_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(gf["winner_team_id"]),))
 def snapshot(m):
-    return {k:m[k] for k in ("winner_team_id","score_a","score_b","result_type","referee","status")}
-def set_result(db,key,winner,score_a=None,score_b=None,result_type="normal",referee=None,actor=None,confirm=False):
+    return {k:m[k] for k in ("winner_team_id","score_a","score_b","result_type","referee","status","forfeit_team_id","disqualified_team_id")}
+def set_result(db,key,winner,score_a=None,score_b=None,result_type="normal",referee=None,actor=None,confirm=False,forfeit_team=None,disqualified_team=None):
     if key not in KEYS: raise ValueError("Unknown match ID.")
     m=get_match(db,key)
     if not m: raise ValueError("Bracket is not initialised.")
     if m["team_a_id"] is None or m["team_b_id"] is None: raise ValueError("Both teams must be available before selecting a winner.")
     if (score_a is None)!=(score_b is None) or any(x is not None and (not isinstance(x,int) or x<0) for x in (score_a,score_b)): raise ValueError("Enter both scores as non-negative whole numbers.")
+    if db.execute("SELECT 1 FROM cc_match_disputes WHERE match_key=? AND status='open' LIMIT 1",(key,)).fetchone():
+        raise ValueError("This match has an open dispute; staff must resolve it before recording a result.")
     if winner is not None and winner not in (m["team_a_id"],m["team_b_id"]): raise ValueError("Winner is not a participant in this match.")
-    if winner is None: score_a=score_b=None; result_type=None
+    if winner is None:
+        score_a=score_b=None; result_type=None; forfeit_team=None; disqualified_team=None
     elif result_type not in ("normal","forfeit","disqualification","override"): raise ValueError("Invalid result type.")
+    if result_type=="forfeit":
+        if forfeit_team is None: forfeit_team=m["team_b_id"] if winner==m["team_a_id"] else m["team_a_id"]
+        if forfeit_team not in (m["team_a_id"],m["team_b_id"]) or forfeit_team==winner:
+            raise ValueError("Forfeiting team must be the losing team in this match.")
+    else: forfeit_team=None
+    if result_type=="disqualification":
+        if disqualified_team is None: disqualified_team=m["team_b_id"] if winner==m["team_a_id"] else m["team_a_id"]
+        if disqualified_team not in (m["team_a_id"],m["team_b_id"]) or disqualified_team==winner:
+            raise ValueError("Disqualified team must be the losing team in this match.")
+    else: disqualified_team=None
     if score_a is not None:
         if score_a==score_b: raise ValueError("Scores cannot be tied.")
         score_winner=m["team_a_id"] if score_a>score_b else m["team_b_id"]
         if result_type=="normal" and score_winner!=winner: raise ValueError("Winner disagrees with the higher score; use an override if intentional.")
     if referee is not None: referee=clean(referee,"Referee",80)
-    old=snapshot(m); new={"winner_team_id":winner,"score_a":score_a,"score_b":score_b,"result_type":result_type,"referee":referee,"status":"completed" if winner is not None else "ready"}
+    old=snapshot(m); new={"winner_team_id":winner,"score_a":score_a,"score_b":score_b,"result_type":result_type,"referee":referee,"forfeit_team_id":forfeit_team,"disqualified_team_id":disqualified_team,"status":"completed" if winner is not None else "ready"}
     changed=old["winner_team_id"]!=winner
     done=[k for k in descendants(key) if get_match(db,k)["winner_team_id"] is not None] if changed else []
     if done and not confirm: raise DownstreamResultsExist(done)

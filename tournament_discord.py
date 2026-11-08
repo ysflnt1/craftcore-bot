@@ -692,6 +692,31 @@ def install(mod):
             tc.audit(mod.db,"champion_prize_delivery_confirmed",{"username":username},interaction.user.id)
         await interaction.response.send_message(f"✅ Delivery confirmed for **{username}**.",ephemeral=True)
 
+    @prize_group.command(name="coin_reward_status",description="Staff: view the highest CraftCoin balance reward snapshot")
+    @mod.staff_only
+    async def coin_reward_status(interaction):
+        row=mod.db.execute("SELECT * FROM cc_coin_rewards WHERE reward_key='highest_balance'").fetchone()
+        if not row:return await interaction.response.send_message("The tournament has not finished or there were no linked participant wallets.",ephemeral=True)
+        await interaction.response.send_message(
+            f"Highest balance at tournament end: **{row['username']}** · **{row['balance_at_tournament_end']} CC** · status: **{row['status']}**.",
+            ephemeral=True,
+        )
+
+    @prize_group.command(name="confirm_coin_reward",description="Staff: confirm the highest-balance participant received the new-season in-game reward")
+    @mod.staff_only
+    async def coin_reward_delivery(interaction):
+        row=mod.db.execute("SELECT * FROM cc_coin_rewards WHERE reward_key='highest_balance'").fetchone()
+        if not row:return await interaction.response.send_message("No highest-balance reward has been recorded.",ephemeral=True)
+        if row["status"]!="pending":return await interaction.response.send_message(f"Reward status is {row['status']}; it cannot be confirmed again.",ephemeral=True)
+        with mod.db:
+            mod.db.execute("UPDATE cc_coin_rewards SET status='delivered',confirmed_by=?,confirmed_at=? WHERE reward_key='highest_balance'",
+                           (interaction.user.id,tc.now()))
+            tc.audit(mod.db,"highest_coin_balance_reward_delivered",{"username":row["username"],"balance":row["balance_at_tournament_end"]},interaction.user.id)
+        if getattr(mod,"publish_tournament_announcement",None):
+            await mod.publish_tournament_announcement("prize_delivery","CraftCoin leaderboard reward delivered",
+                f"The new-season in-game reward was delivered to {row['username']}, who finished the tournament with {row['balance_at_tournament_end']} CraftCoins.")
+        await interaction.response.send_message(f"✅ New-season reward delivery confirmed for **{row['username']}**.",ephemeral=True)
+
     # Small one-tournament award table (for the Hall of Fame panel).
     awards=app_commands.Group(name="awards",description="Tournament MVP and special awards",guild_only=True)
     bot.tree.add_command(awards)

@@ -164,6 +164,20 @@ class ImportConfirm(OwnerConfirm):
 
 def install(mod):
     tc.ensure_schema(mod.db)
+    # PostgreSQL uses expression indexes to retain SQLite's case-insensitive
+    # uniqueness guarantees. If upgrading from the old local file, copy its
+    # legacy economy and match tables before seeding the new tournament.
+    ensure_indexes=getattr(mod.db,"ensure_casefold_indexes",None)
+    if ensure_indexes:
+        ensure_indexes()
+    migrate=getattr(mod.db,"migrate_sqlite_legacy",None)
+    if migrate:
+        try:
+            migrated=migrate(mod.DB_PATH)
+            if migrated:log.info("Imported %s legacy SQLite rows into PostgreSQL.",migrated)
+        except Exception:
+            log.exception("Legacy SQLite import failed; refusing to overwrite or silently ignore existing local data.")
+            raise
     try:
         count=tc.seed_initial_teams(mod.db)
         bracket_count=mod.db.execute("SELECT COUNT(*) FROM cc_bracket_matches").fetchone()[0]

@@ -70,6 +70,11 @@ async def team_ac(mod,interaction,current):
 async def winner_ac(mod,interaction,current):
     return [app_commands.Choice(name=t["name"][:100],value=str(t["id"])) for t in tc.teams(mod.db) if current.casefold() in t["name"].casefold()][:25]
 
+def bind_autocomplete(function,mod):
+    async def callback(interaction,current):
+        return await function(mod,interaction,current)
+    return callback
+
 class DraftSelect(discord.ui.Select):
     def __init__(self,mod,key):
         self.mod,self.key=mod,key
@@ -158,7 +163,7 @@ def install(mod):
         await interaction.response.send_message(f"✅ Registered **{name}** — `{player1}` + `{player2}` (ID {tid}).",ephemeral=True)
 
     @group.command(name="edit",description="Staff: edit a Minecraft roster team")
-    @app_commands.autocomplete(team_id=lambda i,c:team_ac(mod,i,c))
+    @app_commands.autocomplete(team_id=bind_autocomplete(team_ac,mod))
     @mod.staff_only
     async def team_edit(interaction,team_id:str,name:str,player1:str,player2:str,seed:Optional[int]=None):
         if tc.locked(mod.db):return await interaction.response.send_message("Registrations are locked.",ephemeral=True)
@@ -245,7 +250,7 @@ def install(mod):
     async def bracket_view(interaction):await interaction.response.send_message(embed=bracket_embed(mod.db),ephemeral=True)
     @bg.command(name="result",description="Staff: choose a match winner and optionally record scores")
     @app_commands.choices(match_key=MATCHES,result_type=RESULT_TYPES)
-    @app_commands.autocomplete(winner=lambda i,c:winner_ac(mod,i,c))
+    @app_commands.autocomplete(winner=bind_autocomplete(winner_ac,mod))
     @mod.staff_only
     async def bracket_result(interaction,match_key:app_commands.Choice[str],winner:str,result_type:app_commands.Choice[str],score_a:Optional[int]=None,score_b:Optional[int]=None,referee:Optional[str]=None):
         try:
@@ -316,7 +321,7 @@ def install(mod):
     pg=bot.tree.get_command("participant")
     if isinstance(pg,app_commands.Group):
         @pg.command(name="link",description="Staff: link a Minecraft player to a Discord wallet")
-        @app_commands.autocomplete(minecraft_username=lambda i,c:player_ac(mod,i,c))
+        @app_commands.autocomplete(minecraft_username=bind_autocomplete(player_ac,mod))
         @mod.staff_only
         async def participant_link(interaction,minecraft_username:str,member:discord.Member):
             row=mod.db.execute("SELECT username FROM cc_tournament_players WHERE username=? COLLATE NOCASE",(minecraft_username,)).fetchone()

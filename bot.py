@@ -914,7 +914,7 @@ async def match_cancel(interaction: discord.Interaction, match_id: int):
             db.execute(
                 """INSERT INTO cc_coin_transactions(user_id,delta,balance_after,reason,match_id,created_at)
                    VALUES(?,?,?,'bet_refund',?,datetime('now'))""",
-                (b["user_id"], b["amount"], balance["balance"] + b["amount"], match_id),
+                (b["user_id"], b["amount"], balance["balance"], match_id),
             )
         db.execute("UPDATE matches SET status='cancelled' WHERE id=?", (match_id,))
     await refresh_pred_message(match_id)

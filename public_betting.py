@@ -39,7 +39,7 @@ def install(mod):
         return mod.get_player(user_id)
 
     def public_place_bet(uid, mid, team_id, amount):
-        """Allow every server member to place a wager."""
+        """Allow linked tournament participants to place a wager."""
 
         match_data = mod.get_match(mid)
 
@@ -116,10 +116,11 @@ def install(mod):
 
         note = " (replaced your previous wager)" if old else ""
 
+        total_return = int(round(amount * mod.WIN_MULT))
         return True, (
             f"Wagered **{amount}** CraftCoins on **{mod.tn(team_id)}**"
-            f"{note}. If correct, you receive your stake back plus "
-            f"**{int(round(amount * mod.WIN_MULT))}** profit."
+            f"{note}. If correct, your total return is **{total_return}** "
+            f"CraftCoins (stake included; net profit **{total_return - amount}**)."
         )
 
     # Replace the original betting function.
@@ -127,7 +128,7 @@ def install(mod):
     mod.place_bet = public_place_bet
 
     async def public_bet_button_callback(self, interaction):
-        """Allow unregistered members to open the betting modal."""
+        """Allow only linked tournament participants to open the betting modal."""
 
         match_data = mod.get_match(self.match_id)
 

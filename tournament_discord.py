@@ -605,6 +605,56 @@ def install(mod):
                 await mod.publish_tournament_announcement("prize_delivery", "Giveaway prize delivered", f"Staff confirmed delivery of the participant giveaway prize to {draw['username']}.")
             await interaction.response.send_message(f"✅ Delivery confirmed for **{draw['username']}**. The bot has not marked any prize delivered before this staff confirmation.",ephemeral=True)
 
+    # Champion duo prize claims are separate from the participant giveaway.
+    prize_group=app_commands.Group(name="prize",description="Champion duo Nitro prize claims",guild_only=True)
+    bot.tree.add_command(prize_group)
+    @prize_group.command(name="claim",description="Claim your Nitro prize if you are part of the champion duo")
+    async def champion_prize_claim(interaction):
+        champion=mod.db.execute("SELECT value FROM cc_tournament_settings WHERE key='champion_team_id'").fetchone()
+        link=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(interaction.user.id,)).fetchone()
+        if not champion:return await interaction.response.send_message("The Grand Final winner has not been recorded yet.",ephemeral=True)
+        if not link:return await interaction.response.send_message("Link your Discord account to your Minecraft username first.",ephemeral=True)
+        player=mod.db.execute("SELECT team_id FROM cc_tournament_players WHERE username=? COLLATE NOCASE",(link["username"],)).fetchone()
+        if not player or player["team_id"]!=int(champion["value"]):
+            return await interaction.response.send_message("Only players on the champion duo can claim this 2x Nitro prize.",ephemeral=True)
+        existing=mod.db.execute("SELECT * FROM cc_champion_prize_claims WHERE username=? COLLATE NOCASE",(link["username"],)).fetchone()
+        if existing and existing["claim_status"]!="unclaimed":
+            return await interaction.response.send_message(f"Your champion prize status is already {existing['claim_status']}.",ephemeral=True)
+        with mod.db:
+            mod.db.execute("INSERT INTO cc_champion_prize_claims(username,team_id,discord_id,claim_status,claimed_at) VALUES(?,?,?,'claimed',?) ON CONFLICT(username) DO UPDATE SET team_id=excluded.team_id,discord_id=excluded.discord_id,claim_status='claimed',claimed_at=excluded.claimed_at",
+                           (link["username"],player["team_id"],interaction.user.id,tc.now()))
+            tc.audit(mod.db,"champion_prize_claimed",{"username":link["username"],"team_id":player["team_id"]},interaction.user.id)
+        if getattr(mod,"publish_tournament_announcement",None):
+            await mod.publish_tournament_announcement("prize_claim","Champion prize claimed",f"{link['username']} claimed their share of the champion duo's Nitro prize. Staff delivery confirmation is required.")
+        await interaction.response.send_message("✅ Your champion-duo Nitro prize claim is recorded. Staff must confirm delivery separately.",ephemeral=True)
+
+    @prize_group.command(name="status",description="Staff: view both champion duo Nitro claims")
+    @mod.staff_only
+    async def champion_prize_status(interaction):
+        champion=mod.db.execute("SELECT value FROM cc_tournament_settings WHERE key='champion_team_id'").fetchone()
+        if not champion:return await interaction.response.send_message("The Grand Final winner has not been recorded.",ephemeral=True)
+        team=tc.team(mod.db,int(champion["value"]))
+        rows=mod.db.execute("SELECT * FROM cc_champion_prize_claims WHERE team_id=?",(team["id"],)).fetchall()
+        claims={r["username"].casefold():r["claim_status"] for r in rows}
+        lines=[f"{username} · {claims.get(username.casefold(),'unclaimed')}" for username in (team["player1"],team["player2"])]
+        await interaction.response.send_message(f"**Champion duo · {team['name']}**\n"+"\n".join(lines),ephemeral=True)
+
+    @prize_group.command(name="confirm_delivery",description="Staff: confirm one champion player's Nitro prize was delivered")
+    @app_commands.autocomplete(username=bind_autocomplete(player_ac,mod))
+    @mod.staff_only
+    async def champion_prize_delivery(interaction,username:str):
+        champion=mod.db.execute("SELECT value FROM cc_tournament_settings WHERE key='champion_team_id'").fetchone()
+        if not champion:return await interaction.response.send_message("The champion has not been decided.",ephemeral=True)
+        t=mod.db.execute("SELECT team_id FROM cc_tournament_players WHERE username=? COLLATE NOCASE",(username,)).fetchone()
+        if not t or t["team_id"]!=int(champion["value"]):return await interaction.response.send_message("That username is not part of the current champion duo.",ephemeral=True)
+        row=mod.db.execute("SELECT claim_status FROM cc_champion_prize_claims WHERE username=? COLLATE NOCASE",(username,)).fetchone()
+        if not row or row["claim_status"]!="claimed":return await interaction.response.send_message("That player must claim their prize before delivery can be confirmed.",ephemeral=True)
+        with mod.db:
+            mod.db.execute("UPDATE cc_champion_prize_claims SET claim_status='delivered',delivery_confirmed_by=?,delivery_confirmed_at=? WHERE username=? COLLATE NOCASE",
+                           (interaction.user.id,tc.now(),username))
+            tc.audit(mod.db,"champion_prize_delivery_confirmed",{"username":username},interaction.user.id)
+        await interaction.response.send_message(f"✅ Delivery confirmed for **{username}**.",ephemeral=True)
+
     # Small one-tournament award table (for the Hall of Fame panel).
     awards=app_commands.Group(name="awards",description="Tournament MVP and special awards",guild_only=True)
     bot.tree.add_command(awards)

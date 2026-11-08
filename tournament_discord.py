@@ -379,4 +379,104 @@ def install(mod):
             except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
             await interaction.response.send_message(f"Unfroze {member.mention}'s wallet.",ephemeral=True)
 
+
+    async def sync_legacy_bracket():
+        """Mirror linked Minecraft duos into the legacy betting/game tables."""
+        linked = {}
+        for t in tc.teams(mod.db):
+            a = mod.db.execute("SELECT discord_id FROM cc_discord_links WHERE username=? COLLATE NOCASE",(t["player1"],)).fetchone()
+            b = mod.db.execute("SELECT discord_id FROM cc_discord_links WHERE username=? COLLATE NOCASE",(t["player2"],)).fetchone()
+            if not a or not b:
+                continue
+            a_id,b_id=a["discord_id"],b["discord_id"]
+            old=mod.find_team(t["name"])
+            if old:
+                if {old["p1"],old["p2"]}!={a_id,b_id}:
+                    log.warning("Legacy team name conflict for %s; not mirroring this Minecraft team",t["name"])
+                    continue
+                legacy_id=old["id"]
+            else:
+                if mod.team_of(a_id) or mod.team_of(b_id):
+                    log.warning("A linked Discord account already belongs to another legacy team; skipping %s",t["name"])
+                    continue
+                try:
+                    with mod.db:
+                        cur=mod.db.execute("INSERT INTO teams(name,p1,p2) VALUES(?,?,?)",(t["name"],a_id,b_id))
+                        legacy_id=cur.lastrowid
+                except sqlite3.IntegrityError:
+                    log.exception("Could not mirror tournament team %s",t["name"])
+                    continue
+            with mod.db:
+                mod.db.execute("UPDATE cc_tournament_teams SET legacy_team_id=? WHERE id=?",(legacy_id,t["id"]))
+            linked[t["id"]]=legacy_id
+
+        channel_id=mod.cfg_get("predictions_channel")
+        created=0
+        for m in tc.bracket(mod.db):
+            a=linked.get(m["team_a_id"]) if m["team_a_id"] else None
+            b=linked.get(m["team_b_id"]) if m["team_b_id"] else None
+            if not a or not b:
+                continue
+            if a==b:
+                log.error("Tournament match %s maps both teams to the same legacy team",m["match_key"])
+                continue
+            legacy_id=m.get("legacy_match_id")
+            if not legacy_id:
+                try:
+                    with mod.db:
+                        cur=mod.db.execute("INSERT INTO matches(round,team_a,team_b) VALUES(?,?,?)",
+                                           (f"{m['stage']} · {m['label']}",a,b))
+                        legacy_id=cur.lastrowid
+                        mod.db.execute("UPDATE cc_bracket_matches SET legacy_match_id=? WHERE match_key=?",
+                                       (legacy_id,m["match_key"]))
+                    created+=1
+                except sqlite3.IntegrityError:
+                    log.exception("Could not create legacy betting match for %s",m["match_key"])
+                    continue
+            legacy=mod.get_match(legacy_id)
+            if not legacy:
+                continue
+            if legacy["status"]=="done" and legacy["winner"] is not None and m["winner_team_id"] is None:
+                try:
+                    wa,wb=mod.game_wins(legacy_id)
+                    forfeiter=legacy["forfeit_team"]
+                    tc.sync_legacy_result(mod.db,legacy_id,legacy["winner"],forfeiter,
+                                          None if forfeiter else wa,None if forfeiter else wb)
+                    m=tc.get_match(mod.db,m["match_key"])
+                except (ValueError,tc.DownstreamResultsExist):
+                    log.exception("Could not recover legacy result for tournament match %s",m["match_key"])
+            elif legacy["status"] in ("open","locked") and not mod.q1(
+                "SELECT 1 FROM bets WHERE match_id=? LIMIT 1",(legacy_id,)
+            ) and not mod.q1("SELECT 1 FROM games WHERE match_id=? LIMIT 1",(legacy_id,)):
+                if (legacy["team_a"],legacy["team_b"])!=(a,b):
+                    with mod.db:
+                        mod.db.execute("UPDATE matches SET team_a=?,team_b=? WHERE id=?",(a,b,legacy_id))
+            if channel_id and not legacy["pred_msg"] and legacy["status"]=="open":
+                try:
+                    channel=mod.bot.get_channel(int(channel_id)) or await mod.bot.fetch_channel(int(channel_id))
+                    message=await channel.send(embed=mod.match_embed(legacy_id),view=mod.bet_view(legacy_id))
+                    with mod.db:
+                        mod.db.execute("UPDATE matches SET pred_channel=?,pred_msg=? WHERE id=?",
+                                       (channel.id,message.id,legacy_id))
+                except Exception:
+                    log.exception("Could not post prediction panel for bracket match %s",m["match_key"])
+
+        # Keep the legacy game-mode draft in sync; /match game reads that table.
+        for m in tc.bracket(mod.db):
+            if not m.get("legacy_match_id"):
+                continue
+            for selection in tc.draft(mod.db,m["match_key"])["selections"]:
+                legacy_team=None
+                if selection["team_id"] is not None:
+                    tr=tc.team(mod.db,selection["team_id"])
+                    legacy_team=tr.get("legacy_team_id") if tr else None
+                with mod.db:
+                    mod.db.execute(
+                        "INSERT OR IGNORE INTO draft(match_id,step,action,team_id,gamemode) VALUES(?,?,?,?,?)",
+                        (m["legacy_match_id"],selection["step"],selection["action"],legacy_team,selection["gamemode"])
+                    )
+        return created
+
+    mod.sync_tournament_bracket = sync_legacy_bracket
+
     log.info("Tournament teams, bracket, draft, wallet links and coin controls installed.")

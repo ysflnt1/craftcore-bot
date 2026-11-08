@@ -4,6 +4,7 @@ from typing import Optional
 
 import discord
 from discord import app_commands
+import tournament_core as tc
 
 log = logging.getLogger("craftcore-public-betting")
 
@@ -26,11 +27,15 @@ def install(mod):
         ).fetchone()
         if not link:
             return None
+        existed = mod.get_player(user_id)
         db.execute(
             "INSERT OR IGNORE INTO players(user_id, balance) VALUES(?, ?)",
             (user_id, mod.START_COINS),
         )
         db.commit()
+        if not existed:
+            tc.record_coin(db, user_id, mod.START_COINS, "starting_balance")
+            db.commit()
         return mod.get_player(user_id)
 
     def public_place_bet(uid, mid, team_id, amount):
@@ -50,6 +55,8 @@ def install(mod):
         player = ensure_player(uid)
         if not player:
             return False, "Link your Discord account to a registered Minecraft participant first. Ask tournament staff to use /participant link."
+        if tc.wallet_frozen(db, uid):
+            return False, "Your CraftCoin wallet is frozen. Contact tournament staff."
 
         old = mod.q1(
             "SELECT * FROM bets WHERE match_id=? AND user_id=?",
@@ -81,14 +88,19 @@ def install(mod):
             if amount > locked_available:
                 db.rollback()
                 return False, f"You only have **{locked_available}** CraftCoins available."
+            if tc.wallet_frozen(db, uid):
+                db.rollback()
+                return False, "Your CraftCoin wallet is frozen. Contact tournament staff."
             if locked_old:
                 db.execute("UPDATE players SET balance=balance+? WHERE user_id=?", (locked_old["amount"], uid))
+                tc.record_coin(db, uid, locked_old["amount"], "bet_replaced_refund", match_id=mid)
             db.execute(
                 "UPDATE players SET balance=balance-? WHERE user_id=? AND balance>=?",
                 (amount, uid, amount),
             )
             if db.execute("SELECT changes()").fetchone()[0] != 1:
                 raise ValueError("Insufficient CraftCoins.")
+            tc.record_coin(db, uid, -amount, "bet_placed", match_id=mid)
             db.execute(
                 """INSERT INTO bets(match_id,user_id,team_id,amount)
                    VALUES(?,?,?,?)

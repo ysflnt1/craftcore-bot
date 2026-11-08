@@ -364,7 +364,7 @@ def settle(mid, winner):
     for b in bets:
         payout = 0
         if b["team_id"] == winner:
-            payout = b["amount"] + int(round(b["amount"] * WIN_MULT))
+            payout = int(round(b["amount"] * WIN_MULT))
             correct += 1
             paid += payout
             db.execute(
@@ -394,7 +394,7 @@ async def finish_match(mid, winner, forfeit_team=None):
         for bet in bets:
             payout = 0
             if bet["team_id"] == winner:
-                payout = bet["amount"] + int(round(bet["amount"] * WIN_MULT))
+                payout = int(round(bet["amount"] * WIN_MULT))
                 correct += 1
                 paid += payout
                 db.execute(

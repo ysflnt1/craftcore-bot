@@ -93,6 +93,84 @@ class TournamentCoreTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(int(champion["value"]), gf["winner_team_id"])
 
+    def add_legacy_schema(self):
+        self.db.executescript("""
+        CREATE TABLE players(user_id INTEGER PRIMARY KEY,balance INTEGER NOT NULL);
+        CREATE TABLE teams(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,p1 INTEGER,p2 INTEGER);
+        CREATE TABLE matches(id INTEGER PRIMARY KEY AUTOINCREMENT,round TEXT,team_a INTEGER,team_b INTEGER,status TEXT,winner INTEGER,forfeit_team INTEGER,pred_channel INTEGER,pred_msg INTEGER);
+        CREATE TABLE bets(match_id INTEGER,user_id INTEGER,team_id INTEGER,amount INTEGER,settled INTEGER DEFAULT 0,payout INTEGER DEFAULT 0,PRIMARY KEY(match_id,user_id));
+        CREATE TABLE games(match_id INTEGER,game_no INTEGER,gamemode TEXT,score_a INTEGER,score_b INTEGER,PRIMARY KEY(match_id,game_no));
+        CREATE TABLE draft(match_id INTEGER,step INTEGER,action TEXT,team_id INTEGER,gamemode TEXT,PRIMARY KEY(match_id,step));
+        """)
+
+    def link_legacy_match(self,key):
+        m=tc.get_match(self.db,key)
+        a=tc.team(self.db,m["team_a_id"]);b=tc.team(self.db,m["team_b_id"])
+        legacy_a=self.db.execute("INSERT INTO teams(name,p1,p2) VALUES(?,?,?)",(a["name"],1000+a["id"],2000+a["id"])).lastrowid
+        legacy_b=self.db.execute("INSERT INTO teams(name,p1,p2) VALUES(?,?,?)",(b["name"],1000+b["id"],2000+b["id"])).lastrowid
+        self.db.execute("UPDATE cc_tournament_teams SET legacy_team_id=? WHERE id=?",(legacy_a,a["id"]))
+        self.db.execute("UPDATE cc_tournament_teams SET legacy_team_id=? WHERE id=?",(legacy_b,b["id"]))
+        legacy_match=self.db.execute("INSERT INTO matches(round,team_a,team_b,status) VALUES(?,?,?,'open')",(m["stage"],legacy_a,legacy_b)).lastrowid
+        self.db.execute("UPDATE cc_bracket_matches SET legacy_match_id=? WHERE match_key=?",(legacy_match,key))
+        self.db.executemany("INSERT INTO players(user_id,balance) VALUES(?,?)",((1000,900),(1001,1000)))
+        # Bet has already debited 100 from user 1000; the payout is pending.
+        self.db.execute("INSERT INTO bets(match_id,user_id,team_id,amount,settled,payout) VALUES(?,?,?,100,0,0)",(legacy_match,1000,legacy_a))
+        self.db.commit()
+        return legacy_match,legacy_a,legacy_b
+
+    def test_legacy_bet_settles_at_1_5x_total_and_correction_recalculates(self):
+        self.initialise()
+        self.add_legacy_schema()
+        mid,legacy_a,legacy_b=self.link_legacy_match("R1-L1")
+        self.db.execute("UPDATE players SET balance=900 WHERE user_id=1000")
+        match=tc.get_match(self.db,"R1-L1")
+        tc.set_result(self.db,"R1-L1",match["team_a_id"])
+        self.assertEqual(self.db.execute("SELECT balance FROM players WHERE user_id=1000").fetchone()[0],1050)
+        bet=self.db.execute("SELECT * FROM bets WHERE match_id=? AND user_id=1000",(mid,)).fetchone()
+        self.assertEqual((bet["settled"],bet["payout"]),(1,150))
+        self.assertEqual(self.db.execute("SELECT status,winner FROM matches WHERE id=?",(mid,)).fetchone()["status"],"done")
+        tc.set_result(self.db,"R1-L1",match["team_b_id"])
+        self.assertEqual(self.db.execute("SELECT balance FROM players WHERE user_id=1000").fetchone()[0],900)
+        self.assertEqual(self.db.execute("SELECT payout FROM bets WHERE match_id=? AND user_id=1000",(mid,)).fetchone()[0],0)
+
+    def test_undoing_bridged_result_refunds_stake_and_cancels_old_match(self):
+        self.initialise()
+        self.add_legacy_schema()
+        mid,legacy_a,_=self.link_legacy_match("R1-L1")
+        m=tc.get_match(self.db,"R1-L1")
+        tc.set_result(self.db,"R1-L1",m["team_a_id"])
+        tc.set_result(self.db,"R1-L1",None)
+        self.assertEqual(self.db.execute("SELECT balance FROM players WHERE user_id=1000").fetchone()[0],1000)
+        legacy=self.db.execute("SELECT status FROM matches WHERE id=?",(mid,)).fetchone()
+        self.assertEqual(legacy["status"],"cancelled")
+        self.assertIsNone(tc.get_match(self.db,"R1-L1")["legacy_match_id"])
+
+    def test_downstream_betting_match_is_refunded_when_upstream_winner_changes(self):
+        self.initialise()
+        self.add_legacy_schema()
+        # Determine both quarterfinal contestants first.
+        for key in ("R1-L1","R1-L2"):
+            m=tc.get_match(self.db,key)
+            tc.set_result(self.db,key,m["team_a_id"])
+        qf=tc.get_match(self.db,"QF-L1")
+        a=tc.team(self.db,qf["team_a_id"]);b=tc.team(self.db,qf["team_b_id"])
+        la=self.db.execute("INSERT INTO teams(name,p1,p2) VALUES(?,?,?)",(a["name"],301,302)).lastrowid
+        lb=self.db.execute("INSERT INTO teams(name,p1,p2) VALUES(?,?,?)",(b["name"],303,304)).lastrowid
+        self.db.execute("UPDATE cc_tournament_teams SET legacy_team_id=? WHERE id=?",(la,a["id"]))
+        self.db.execute("UPDATE cc_tournament_teams SET legacy_team_id=? WHERE id=?",(lb,b["id"]))
+        legacy_mid=self.db.execute("INSERT INTO matches(round,team_a,team_b,status) VALUES('QF',?,?,'open')",(la,lb)).lastrowid
+        self.db.execute("UPDATE cc_bracket_matches SET legacy_match_id=? WHERE match_key='QF-L1'",(legacy_mid,))
+        self.db.execute("INSERT INTO players(user_id,balance) VALUES(500,900)")
+        self.db.execute("INSERT INTO bets(match_id,user_id,team_id,amount,settled,payout) VALUES(?,500,?,100,0,0)",(legacy_mid,la))
+        self.db.commit()
+        upstream=tc.get_match(self.db,"R1-L1")
+        with self.assertRaises(tc.DownstreamResultsExist):
+            tc.set_result(self.db,"R1-L1",upstream["team_b_id"])
+        tc.set_result(self.db,"R1-L1",upstream["team_b_id"],confirm=True)
+        self.assertEqual(self.db.execute("SELECT balance FROM players WHERE user_id=500").fetchone()[0],1000)
+        self.assertEqual(self.db.execute("SELECT status FROM matches WHERE id=?",(legacy_mid,)).fetchone()[0],"cancelled")
+        self.assertIsNone(tc.get_match(self.db,"QF-L1")["legacy_match_id"])
+
     def test_bracket_backup_round_trip_and_validation(self):
         self.initialise()
         m = tc.get_match(self.db, "R1-L1")

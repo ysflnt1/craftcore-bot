@@ -193,6 +193,8 @@ def create_team(db,name,p1,p2,seed=None,actor=None):
         if "name" in msg: raise ValueError(f"Team '{name}' already exists.") from e
         raise ValueError(f"Could not create team: {e}") from e
 def edit_team(db,tid,name,p1,p2,seed=None,actor=None):
+    if db.execute("SELECT COUNT(*) FROM cc_bracket_matches").fetchone()[0]:
+        raise ValueError("Team identities can only be edited before the fixed bracket is initialised.")
     old=team(db,tid)
     if not old: raise ValueError("Team not found.")
     name,p1,p2=clean(name,"Team name",50),clean(p1,"Player 1 username",32),clean(p2,"Player 2 username",32)

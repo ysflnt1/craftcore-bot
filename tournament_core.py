@@ -74,7 +74,64 @@ def ensure_schema(db):
         updated_by INTEGER,
         updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS cc_match_disputes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        match_key TEXT NOT NULL,
+        raised_by INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved')),
+        previous_legacy_status TEXT,
+        resolved_by INTEGER,
+        resolution TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS cc_match_disputes_active_idx ON cc_match_disputes(match_key,status);
+    CREATE TABLE IF NOT EXISTS cc_panel_messages(
+        panel_key TEXT PRIMARY KEY,
+        guild_id INTEGER NOT NULL,
+        channel_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cc_awards(
+        award_key TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        description TEXT,
+        awarded_by INTEGER,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cc_giveaway_draws(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL,
+        discord_id INTEGER,
+        eligible_count INTEGER NOT NULL,
+        drawn_by INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        claim_status TEXT NOT NULL DEFAULT 'unclaimed'
+            CHECK(claim_status IN ('unclaimed','claimed','delivered')),
+        claimed_by INTEGER,
+        claimed_at TEXT,
+        delivery_confirmed_by INTEGER,
+        delivery_confirmed_at TEXT
+    );
     """)
+    # Safe additive migrations for columns added after the initial deployment.
+    migrations = {
+        "cc_tournament_teams": {
+            "legacy_team_id": "INTEGER"
+        },
+        "cc_bracket_matches": {
+            "legacy_match_id": "INTEGER",
+            "forfeit_team_id": "INTEGER",
+            "disqualified_team_id": "INTEGER"
+        },
+    }
+    for table_name, columns in migrations.items():
+        present = {row["name"] for row in db.execute(f"PRAGMA table_info({table_name})")}
+        for column_name, definition in columns.items():
+            if column_name not in present:
+                db.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
     db.commit()
 
 def teams(db):

@@ -29,6 +29,22 @@ class TournamentCoreTests(unittest.TestCase):
         )
         self.assertEqual(len(tc.bracket(self.db)), 15)
 
+    def test_prelaunch_team_replacement_keeps_original_bracket_slot(self):
+        self.assertEqual(tc.seed_initial_teams(self.db), 16)
+        original = tc.team(self.db, "Team Levi")
+        slot = original["bracket_slot"]
+        tc.delete_team(self.db, original["id"])
+        replacement_id = tc.create_team(self.db, "Team Replacement", "NewPlayerA", "NewPlayerB")
+        replacement = tc.team(self.db, replacement_id)
+        self.assertEqual(replacement["bracket_slot"], slot)
+        tc.initialise_bracket(self.db)
+        first = tc.get_match(self.db, "R1-L1")
+        yugo = tc.team(self.db, "Team Yugo")
+        self.assertEqual(first["team_a_id"], replacement_id)
+        self.assertEqual(first["team_b_id"], yugo["id"])
+        with self.assertRaises(ValueError):
+            tc.delete_team(self.db, replacement_id)
+
     def test_seed_refuses_to_exceed_fixed_sixteen_team_limit(self):
         tc.create_team(self.db, "Pre-existing custom team", "customA", "customB")
         with self.assertRaises(ValueError):

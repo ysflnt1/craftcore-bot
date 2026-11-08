@@ -23,6 +23,11 @@ jobs:
           pip install -r requirements.txt
       - name: Compile Python files
         run: python -m compileall -q .
+      - name: Import bot and verify command registration
+        env:
+          DISCORD_TOKEN: not-used-in-smoke-test
+        run: |
+          python -c "import bot; assert bot.bot.tree.get_command('bracket'); assert bot.bot.tree.get_command('draft'); assert bot.bot.tree.get_command('tournament'); assert bot.bot.tree.get_command('team')"
       - name: Install test runner
         run: pip install pytest
       - name: Run tests

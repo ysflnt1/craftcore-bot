@@ -421,7 +421,14 @@ def install(mod):
                 log.error("Tournament match %s maps both teams to the same legacy team",m["match_key"])
                 continue
             legacy_id=m.get("legacy_match_id")
+            previous=mod.get_match(legacy_id) if legacy_id else None
+            if legacy_id and (not previous or previous["status"]=="cancelled"):
+                with mod.db:
+                    mod.db.execute("UPDATE cc_bracket_matches SET legacy_match_id=NULL WHERE match_key=?",(m["match_key"],))
+                legacy_id=None
             if not legacy_id:
+                if m["status"]=="completed":
+                    continue
                 try:
                     with mod.db:
                         cur=mod.db.execute("INSERT INTO matches(round,team_a,team_b) VALUES(?,?,?)",
@@ -440,8 +447,9 @@ def install(mod):
                 try:
                     wa,wb=mod.game_wins(legacy_id)
                     forfeiter=legacy["forfeit_team"]
+                    has_score=forfeiter is None and wa!=wb
                     tc.sync_legacy_result(mod.db,legacy_id,legacy["winner"],forfeiter,
-                                          None if forfeiter else wa,None if forfeiter else wb)
+                                          wa if has_score else None,wb if has_score else None)
                     m=tc.get_match(mod.db,m["match_key"])
                 except (ValueError,tc.DownstreamResultsExist):
                     log.exception("Could not recover legacy result for tournament match %s",m["match_key"])
@@ -465,16 +473,19 @@ def install(mod):
         for m in tc.bracket(mod.db):
             if not m.get("legacy_match_id"):
                 continue
-            for selection in tc.draft(mod.db,m["match_key"])["selections"]:
-                legacy_team=None
-                if selection["team_id"] is not None:
-                    tr=tc.team(mod.db,selection["team_id"])
-                    legacy_team=tr.get("legacy_team_id") if tr else None
+            legacy=mod.get_match(m["legacy_match_id"])
+            if legacy and legacy["status"] in ("open","locked") and not mod.q1("SELECT 1 FROM games WHERE match_id=? LIMIT 1",(m["legacy_match_id"],)):
                 with mod.db:
-                    mod.db.execute(
-                        "INSERT OR IGNORE INTO draft(match_id,step,action,team_id,gamemode) VALUES(?,?,?,?,?)",
-                        (m["legacy_match_id"],selection["step"],selection["action"],legacy_team,selection["gamemode"])
-                    )
+                    mod.db.execute("DELETE FROM draft WHERE match_id=?",(m["legacy_match_id"],))
+                    for selection in tc.draft(mod.db,m["match_key"])["selections"]:
+                        legacy_team=None
+                        if selection["team_id"] is not None:
+                            tr=tc.team(mod.db,selection["team_id"])
+                            legacy_team=tr.get("legacy_team_id") if tr else None
+                        mod.db.execute(
+                            "INSERT INTO draft(match_id,step,action,team_id,gamemode) VALUES(?,?,?,?,?)",
+                            (m["legacy_match_id"],selection["step"],selection["action"],legacy_team,selection["gamemode"])
+                        )
         return created
 
     mod.sync_tournament_bracket = sync_legacy_bracket

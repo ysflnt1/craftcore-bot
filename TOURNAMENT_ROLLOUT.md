@@ -72,4 +72,4 @@ Run locally with Python 3.12:
     pip install pytest
     pytest -q
 
-The GitHub Actions workflow in .github/workflows/tests.yml runs compilation and the tournament-core tests on pushes and pull requests. A workflow result should be checked in GitHub before treating the change as passing CI.
+The GitHub Actions workflow in .github/workflows/tests.yml compiles the project, imports the bot to validate Discord command registration, and runs the tournament-core tests on pushes and pull requests. The latest checked run passed: 10 tests, 0 failures.

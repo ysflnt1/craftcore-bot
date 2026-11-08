@@ -168,17 +168,28 @@ def create_team(db,name,p1,p2,seed=None,actor=None):
     name,p1,p2=clean(name,"Team name",50),clean(p1,"Player 1 username",32),clean(p2,"Player 2 username",32)
     if p1.casefold()==p2.casefold(): raise ValueError("A player cannot occupy both places on a team.")
     if seed is not None and not 1<=int(seed)<=16: raise ValueError("Seed must be between 1 and 16.")
-    if db.execute("SELECT COUNT(*) FROM cc_tournament_teams").fetchone()[0]>=16: raise ValueError("This is a fixed 16-team tournament; all 16 places are registered.")
+    if db.execute("SELECT COUNT(*) FROM cc_bracket_matches").fetchone()[0]:
+        raise ValueError("The fixed bracket has already been initialised. Team slots cannot be changed after launch.")
+    if db.execute("SELECT COUNT(*) FROM cc_tournament_teams").fetchone()[0]>=16:
+        raise ValueError("This is a fixed 16-team tournament; all 16 places are registered.")
+    used_slots={r["bracket_slot"] for r in db.execute("SELECT bracket_slot FROM cc_tournament_teams WHERE bracket_slot IS NOT NULL")}
+    available=[x for x in range(1,17) if x not in used_slots]
+    if not available: raise ValueError("No bracket slot is available.")
+    slot=available[0]
+    if seed is None:
+        used_seeds={r["seed"] for r in db.execute("SELECT seed FROM cc_tournament_teams WHERE seed IS NOT NULL")}
+        seed=next((x for x in range(1,17) if x not in used_seeds),slot)
     try:
         with db:
-            cur=db.execute("INSERT INTO cc_tournament_teams(name,seed,created_at) VALUES(?,?,?)",(name,seed,now())); tid=cur.lastrowid
+            cur=db.execute("INSERT INTO cc_tournament_teams(name,seed,bracket_slot,created_at) VALUES(?,?,?,?)",(name,seed,slot,now())); tid=cur.lastrowid
             db.executemany("INSERT INTO cc_tournament_players(username,team_id,slot) VALUES(?,?,?)",((p1,tid,1),(p2,tid,2)))
-            audit(db,"team_created",{"id":tid,"name":name,"players":[p1,p2],"seed":seed},actor)
+            audit(db,"team_created",{"id":tid,"name":name,"players":[p1,p2],"seed":seed,"bracket_slot":slot},actor)
         return tid
     except sqlite3.IntegrityError as e:
         msg=str(e).lower()
         if "username" in msg: raise ValueError("One or both Minecraft usernames are already registered.") from e
         if "seed" in msg: raise ValueError(f"Seed {seed} is already assigned.") from e
+        if "bracket_slot" in msg: raise ValueError(f"Bracket slot {slot} is already assigned.") from e
         if "name" in msg: raise ValueError(f"Team '{name}' already exists.") from e
         raise ValueError(f"Could not create team: {e}") from e
 def edit_team(db,tid,name,p1,p2,seed=None,actor=None):
@@ -198,8 +209,11 @@ def edit_team(db,tid,name,p1,p2,seed=None,actor=None):
 def delete_team(db,tid,actor=None):
     t=team(db,tid)
     if not t: raise ValueError("Team not found.")
-    if db.execute("SELECT 1 FROM cc_bracket_matches WHERE team_a_id=? OR team_b_id=?",(tid,tid)).fetchone(): raise ValueError("This team is part of the fixed bracket and cannot be deleted.")
-    with db: db.execute("DELETE FROM cc_tournament_teams WHERE id=?",(tid,)); audit(db,"team_deleted",t,actor)
+    if db.execute("SELECT COUNT(*) FROM cc_bracket_matches").fetchone()[0]:
+        raise ValueError("The fixed bracket has already been initialised. A team cannot be deleted after launch.")
+    with db:
+        db.execute("DELETE FROM cc_tournament_teams WHERE id=?",(tid,))
+        audit(db,"team_deleted",t,actor)
 
 def seed_initial_teams(db,actor=None):
     current=teams(db)

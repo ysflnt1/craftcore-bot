@@ -27,7 +27,7 @@ jobs:
         env:
           DISCORD_TOKEN: not-used-in-smoke-test
         run: |
-          python -c "import bot; assert bot.bot.tree.get_command('bracket'); assert bot.bot.tree.get_command('draft'); assert bot.bot.tree.get_command('tournament'); assert bot.bot.tree.get_command('team')"
+          python -c "import bot; assert all(bot.bot.tree.get_command(x) for x in ('bracket','draft','tournament','team','match','panels','announcement','player','prize','awards','betting')); assert bot.panel_view_factory().is_persistent()"
       - name: Install test runner
         run: pip install pytest
       - name: Run tests

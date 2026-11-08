@@ -260,16 +260,24 @@ def install(mod):
     async def bracket_result(interaction,match_key:app_commands.Choice[str],winner:str,result_type:app_commands.Choice[str],score_a:Optional[int]=None,score_b:Optional[int]=None,referee:Optional[str]=None):
         try:
             tid=int(winner);cleared=tc.set_result(mod.db,match_key.value,tid,score_a,score_b,result_type.value,referee,interaction.user.id)
+            await mod.sync_tournament_bracket()
         except tc.DownstreamResultsExist as ex:
             detail=", ".join(f"{k} ({next(x[2] for x in tc.DEFS if x[0]==k)})" for k in ex.match_keys)
-            return await interaction.response.send_message(f"⚠️ This changes completed downstream results: **{detail}**. Confirm to clear them.",view=ResultConfirm(mod,interaction.user.id,match_key.value,tid,score_a,score_b,result_type.value,referee),ephemeral=True)
+            return await interaction.response.send_message(f"⚠️ This resets downstream results/drafts and refunds their wagers: **{detail}**. Confirm to continue.",view=ResultConfirm(mod,interaction.user.id,match_key.value,tid,score_a,score_b,result_type.value,referee),ephemeral=True)
         except (ValueError,TypeError) as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
-        await interaction.response.send_message(f"✅ **{team_name(mod.db,tid)}** recorded as winner of **{match_key.value}**. Invalidated: {', '.join(cleared) if cleared else 'none'}.",ephemeral=True)
+        updated=tc.get_match(mod.db,match_key.value)
+        if updated and updated.get("legacy_match_id"):
+            await mod.refresh_pred_message(updated["legacy_match_id"])
+            if updated["status"]=="completed":
+                await mod.post_result(updated["legacy_match_id"])
+        await interaction.response.send_message(f"✅ **{team_name(mod.db,tid)}** recorded as winner of **{match_key.value}**. Downstream resets: {', '.join(cleared) if cleared else 'none'}.",ephemeral=True)
     @bg.command(name="undo",description="Staff: clear a match winner (confirms dependent result invalidation)")
     @app_commands.choices(match_key=MATCHES)
     @mod.staff_only
     async def bracket_undo(interaction,match_key:app_commands.Choice[str]):
-        try:cleared=tc.set_result(mod.db,match_key.value,None,actor=interaction.user.id)
+        try:
+            cleared=tc.set_result(mod.db,match_key.value,None,actor=interaction.user.id)
+            await mod.sync_tournament_bracket()
         except tc.DownstreamResultsExist as ex:
             return await interaction.response.send_message(f"Undoing **{match_key.value}** clears completed downstream results: **{', '.join(ex.match_keys)}**. Confirm?",view=ResultConfirm(mod,interaction.user.id,match_key.value,None,None,None,"normal",None),ephemeral=True)
         except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)

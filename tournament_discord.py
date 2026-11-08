@@ -37,7 +37,7 @@ def bracket_embed(db):
             if m["stage"]!=stage:continue
             state=f" → **{m['winner_name']}**" if m["winner_name"] else (" · ✅ completed" if m["status"]=="completed" else " · ⏳ waiting" if m["status"]=="waiting" else " · Ready")
             score=f" ({m['score_a']}–{m['score_b']})" if m["score_a"] is not None else ""
-            values.append(f"\`{m['match_key']}\` **{m['team_a_name']}** vs **{m['team_b_name']}**{score}{state}")
+            values.append(f"`{m['match_key']}` **{m['team_a_name']}** vs **{m['team_b_name']}**{score}{state}")
         if values:e.add_field(name=stage,value="\n".join(values),inline=False)
     e.set_footer(text="Use /bracket result to record winners. All staff changes are audited.")
     return e
@@ -155,7 +155,7 @@ def install(mod):
         if tc.locked(mod.db):return await interaction.response.send_message("Registrations are locked.",ephemeral=True)
         try:tid=tc.create_team(mod.db,name,player1,player2,seed,interaction.user.id)
         except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
-        await interaction.response.send_message(f"✅ Registered **{name}** — \`{player1}\` + \`{player2}\` (ID {tid}).",ephemeral=True)
+        await interaction.response.send_message(f"✅ Registered **{name}** — `{player1}` + `{player2}` (ID {tid}).",ephemeral=True)
 
     @group.command(name="edit",description="Staff: edit a Minecraft roster team")
     @app_commands.autocomplete(team_id=lambda i,c:team_ac(mod,i,c))
@@ -179,7 +179,7 @@ def install(mod):
     async def team_list(interaction):
         rows=tc.teams(mod.db)
         if not rows:return await interaction.response.send_message("No teams registered.",ephemeral=True)
-        lines=[f"\`{t['seed'] or '—'}\` **{t['name']}** — \`{t['player1']}\` + \`{t['player2']}\`" for t in rows]
+        lines=[f"`{t['seed'] or '—'}` **{t['name']}** — `{t['player1']}` + `{t['player2']}`" for t in rows]
         e=discord.Embed(title="CRAFTCORE · TEAM DIRECTORY",description="\n".join(lines)[:4000],colour=discord.Colour.blurple())
         e.set_footer(text=f"{len(rows)}/16 teams")
         await interaction.response.send_message(embed=e,ephemeral=True)
@@ -188,7 +188,7 @@ def install(mod):
     async def team_search(interaction,query:str):
         rows=[t for t in tc.teams(mod.db) if query.casefold() in t["name"].casefold() or query.casefold() in t["player1"].casefold() or query.casefold() in t["player2"].casefold()]
         if not rows:return await interaction.response.send_message("No matching team or player.",ephemeral=True)
-        await interaction.response.send_message("\n".join(f"**{t['name']}** — \`{t['player1']}\` + \`{t['player2']}\` · seed {t['seed'] or '—'}" for t in rows[:20]),ephemeral=True)
+        await interaction.response.send_message("\n".join(f"**{t['name']}** — `{t['player1']}` + `{t['player2']}` · seed {t['seed'] or '—'}" for t in rows[:20]),ephemeral=True)
 
     @group.command(name="import",description="Staff: import CSV or JSON tournament teams")
     @mod.staff_only
@@ -270,7 +270,7 @@ def install(mod):
     async def bracket_history(interaction,match_key:app_commands.Choice[str]):
         rows=tc.history(mod.db,match_key.value)
         if not rows:return await interaction.response.send_message("No match history recorded yet.",ephemeral=True)
-        await interaction.response.send_message(f"**{match_key.value} history**\n"+"\n".join(f"\`{r['created_at']}\` · {r['action']} · staff {r['actor_id'] or 'system'}" for r in rows),ephemeral=True)
+        await interaction.response.send_message(f"**{match_key.value} history**\n"+"\n".join(f"`{r['created_at']}` · {r['action']} · staff {r['actor_id'] or 'system'}" for r in rows),ephemeral=True)
     @bg.command(name="reset",description="Staff: reset bracket results and drafts, preserving teams and coins")
     @mod.staff_only
     async def bracket_reset(interaction):
@@ -324,8 +324,8 @@ def install(mod):
             uname=row["username"]
             by_name=mod.db.execute("SELECT discord_id FROM cc_discord_links WHERE username=? COLLATE NOCASE",(uname,)).fetchone()
             by_user=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(member.id,)).fetchone()
-            if by_name and by_name["discord_id"]!=member.id:return await interaction.response.send_message(f"\`{uname}\` is already linked to a different Discord account.",ephemeral=True)
-            if by_user and by_user["username"].casefold()!=uname.casefold():return await interaction.response.send_message(f"{member.mention} is already linked to \`{by_user['username']}\`.",ephemeral=True)
+            if by_name and by_name["discord_id"]!=member.id:return await interaction.response.send_message(f"`{uname}` is already linked to a different Discord account.",ephemeral=True)
+            if by_user and by_user["username"].casefold()!=uname.casefold():return await interaction.response.send_message(f"{member.mention} is already linked to `{by_user['username']}`.",ephemeral=True)
             with mod.db:
                 existed=mod.get_player(member.id)
                 mod.db.execute("INSERT OR IGNORE INTO players(user_id,balance) VALUES(?,?)",(member.id,mod.START_COINS))
@@ -334,7 +334,7 @@ def install(mod):
                 mod.db.execute("INSERT INTO cc_discord_links(username,discord_id,linked_by,linked_at) VALUES(?,?,?,?) ON CONFLICT(username) DO UPDATE SET discord_id=excluded.discord_id,linked_by=excluded.linked_by,linked_at=excluded.linked_at",(uname,member.id,interaction.user.id,tc.now()))
                 tc.audit(mod.db,"discord_wallet_linked",{"username":uname,"discord_id":member.id},interaction.user.id)
             wallet=mod.get_player(member.id)
-            await interaction.response.send_message(f"✅ Linked \`{uname}\` to {member.mention}. Existing wallet balance preserved: **{wallet['balance']}**.",ephemeral=True)
+            await interaction.response.send_message(f"✅ Linked `{uname}` to {member.mention}. Existing wallet balance preserved: **{wallet['balance']}**.",ephemeral=True)
         @pg.command(name="unlink",description="Staff: unlink a Minecraft player without deleting their wallet")
         @app_commands.autocomplete(minecraft_username=lambda i,c:player_ac(mod,i,c))
         @mod.staff_only
@@ -344,7 +344,7 @@ def install(mod):
             with mod.db:
                 mod.db.execute("DELETE FROM cc_discord_links WHERE username=? COLLATE NOCASE",(minecraft_username,))
                 tc.audit(mod.db,"discord_wallet_unlinked",{"username":minecraft_username,"discord_id":row["discord_id"]},interaction.user.id)
-            await interaction.response.send_message(f"✅ Unlinked \`{minecraft_username}\`. Wallet and bet history preserved.",ephemeral=True)
+            await interaction.response.send_message(f"✅ Unlinked `{minecraft_username}`. Wallet and bet history preserved.",ephemeral=True)
     # CraftCoin history and wallet freeze controls complement the legacy /coins group.
     cg=bot.tree.get_command("coins")
     if isinstance(cg,app_commands.Group):

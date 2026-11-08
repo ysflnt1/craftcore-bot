@@ -142,9 +142,11 @@ class ResetConfirm(OwnerConfirm):
     def __init__(self,mod,owner):super().__init__(owner);self.mod=mod
     @discord.ui.button(label="Reset bracket progress",style=discord.ButtonStyle.danger)
     async def confirm(self,interaction,button):
-        try:tc.reset_bracket(self.mod.db,interaction.user.id)
+        try:
+            tc.reset_bracket(self.mod.db,interaction.user.id)
+            await self.mod.sync_tournament_bracket()
         except ValueError as ex:return await interaction.response.edit_message(content=str(ex),view=None)
-        await interaction.response.edit_message(content="✅ Bracket and drafts reset. Teams, CraftCoin balances and legacy betting history are untouched.",view=None)
+        await interaction.response.edit_message(content="✅ Bracket and drafts reset. Affected wagers were refunded, old match/bet history was preserved, and fresh Round 1 match records were created. Teams and existing CraftCoin balances were preserved.",view=None)
     @discord.ui.button(label="Cancel",style=discord.ButtonStyle.secondary)
     async def cancel(self,interaction,button):await interaction.response.edit_message(content="Reset cancelled.",view=None)
 

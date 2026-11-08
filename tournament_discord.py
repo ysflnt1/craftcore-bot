@@ -368,7 +368,7 @@ def install(mod):
     async def bracket_import(interaction,file:discord.Attachment):
         try:
             payload=await file.read()
-            temp=sqlite3.connect(":memory:");mod.db.backup(temp);temp.row_factory=sqlite3.Row;tc.import_bracket(temp,payload,interaction.user.id);temp.close()
+            tc.validate_bracket_backup(mod.db,payload)
         except (ValueError,sqlite3.Error,OSError) as ex:return await interaction.response.send_message(f"Backup rejected: {ex}",ephemeral=True)
         await interaction.response.send_message("Backup validated. This overwrites current match progress. Continue?",view=ImportConfirm(mod,interaction.user.id,payload),ephemeral=True)
 

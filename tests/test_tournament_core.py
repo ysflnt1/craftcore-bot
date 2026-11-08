@@ -29,6 +29,12 @@ class TournamentCoreTests(unittest.TestCase):
         )
         self.assertEqual(len(tc.bracket(self.db)), 15)
 
+    def test_seed_refuses_to_exceed_fixed_sixteen_team_limit(self):
+        tc.create_team(self.db, "Pre-existing custom team", "customA", "customB")
+        with self.assertRaises(ValueError):
+            tc.seed_initial_teams(self.db)
+        self.assertEqual(len(tc.teams(self.db)), 1)
+
     def test_duplicate_minecraft_username_is_rejected_case_insensitively(self):
         self.initialise()
         with self.assertRaises(ValueError):

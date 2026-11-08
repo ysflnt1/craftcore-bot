@@ -43,6 +43,8 @@ def install(mod):
 
         match_data = mod.get_match(mid)
 
+        if not db.execute("SELECT 1 FROM cc_bracket_matches WHERE legacy_match_id=?",(mid,)).fetchone():
+            return False, "Betting is available only for matches in the fixed Craftcore bracket."
         if not match_data or match_data["status"] != "open":
             return False, "Predictions for this match are closed."
 
@@ -132,6 +134,8 @@ def install(mod):
 
         match_data = mod.get_match(self.match_id)
 
+        if not db.execute("SELECT 1 FROM cc_bracket_matches WHERE legacy_match_id=?",(self.match_id,)).fetchone():
+            return await interaction.response.send_message("This is not a match in the fixed tournament bracket.",ephemeral=True)
         if not match_data or match_data["status"] != "open":
             return await interaction.response.send_message(
                 "Predictions for this match are closed.",

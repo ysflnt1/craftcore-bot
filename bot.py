@@ -540,8 +540,16 @@ def is_staff(interaction: discord.Interaction) -> bool:
     user = interaction.user
     if user.guild_permissions.administrator or user.guild_permissions.manage_guild:
         return True
-    rid = cfg_get("staff_role")
-    if rid and any(r.id == int(rid) for r in getattr(user, "roles", [])):
+    configured_ids = {
+        value.strip()
+        for value in os.getenv("STAFF_ROLE_IDS", "").split(",")
+        if value.strip()
+    }
+    legacy_id = cfg_get("staff_role")
+    if legacy_id:
+        configured_ids.add(str(legacy_id))
+    member_role_ids = {str(role.id) for role in getattr(user, "roles", [])}
+    if configured_ids.intersection(member_role_ids):
         return True
     raise app_commands.CheckFailure("staff only")
 
@@ -612,8 +620,13 @@ async def participant_add(interaction: discord.Interaction, user: discord.Member
         return await interaction.response.send_message(
             f"{user.mention} is already registered.", ephemeral=True
         )
-    db.execute("INSERT INTO players(user_id,balance) VALUES(?,?)", (user.id, START_COINS))
-    db.commit()
+    with db:
+        db.execute("INSERT INTO players(user_id,balance) VALUES(?,?)", (user.id, START_COINS))
+        db.execute(
+            """INSERT INTO cc_coin_transactions(user_id,delta,balance_after,reason,actor_id,created_at)
+               VALUES(?,?,?,'starting_balance',?,datetime('now'))""",
+            (user.id, START_COINS, START_COINS, interaction.user.id),
+        )
     await interaction.response.send_message(
         f"✅ Registered {user.mention} with **{START_COINS}** CraftCoins.", ephemeral=True
     )

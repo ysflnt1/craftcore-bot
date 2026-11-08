@@ -491,6 +491,9 @@ def place_bet(uid, mid, team_id, amount):
 class CraftBot(commands.Bot):
     async def setup_hook(self):
         self.add_dynamic_items(BetButton)
+        panel_factory = getattr(__import__("sys").modules[__name__], "panel_view_factory", None)
+        if panel_factory:
+            self.add_view(panel_factory())
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
             self.tree.copy_global_to(guild=guild)
@@ -1166,6 +1169,13 @@ async def on_ready():
             log.info("Tournament bridge ready; created %s new legacy match records", created)
         except Exception:
             log.exception("Could not restore the tournament-to-betting match bridge")
+    refresh_panels = getattr(__import__("sys").modules[__name__], "refresh_tournament_panels", None)
+    if refresh_panels:
+        try:
+            updated, repaired = await refresh_panels(False)
+            log.info("Refreshed %s saved tournament panels", updated)
+        except Exception:
+            log.exception("Could not refresh saved tournament panels")
 
 
 import public_betting
@@ -1175,6 +1185,8 @@ public_betting.install(__import__("sys").modules[__name__])
 # Additive Minecraft-username roster, fixed bracket, and tournament draft.
 import tournament_discord
 tournament_discord.install(__import__("sys").modules[__name__])
+import tournament_panels
+tournament_panels.install(__import__("sys").modules[__name__])
 
 
 if __name__ == "__main__":

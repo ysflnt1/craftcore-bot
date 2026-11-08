@@ -21,6 +21,9 @@ services:
       - key: GUILD_ID
         sync: false
 
+      - key: STAFF_ROLE_IDS
+        sync: false
+
       - key: STARTING_COINS
         value: "100"
 

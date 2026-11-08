@@ -93,9 +93,11 @@ def panel_embed(mod,key,user_id=None):
             score=f" · {m['score_a']}-{m['score_b']}" if m["score_a"] is not None else ""
             ref=f" · Ref: {m['referee']}" if m["referee"] else ""
             winner=f" · Winner: {m['winner_name']}" if m["winner_name"] else ""
+            forfeit=f" · Forfeit: {tc.name(mod.db,m['forfeit_team_id'])}" if m.get("forfeit_team_id") else ""
+            disq=f" · DQ: {tc.name(mod.db,m['disqualified_team_id'])}" if m.get("disqualified_team_id") else ""
             state=tc.draft(mod.db,m["match_key"])
             modes=f" · Modes: {', '.join(x['gamemode'] for x in state['selections'])}" if state["selections"] else ""
-            lines.append(f"**{m['match_key']}** · {m['team_a_name']} vs {m['team_b_name']}{score}{winner}{ref}{modes}")
+            lines.append(f"**{m['match_key']}** · {m['team_a_name']} vs {m['team_b_name']}{score}{winner}{ref}{forfeit}{disq}{modes}")
         e.description="\n".join(lines)[:4000] or "Bracket is not initialised."
         e.set_footer(text="Use /match view or /match result for individual match management.")
     elif key=="draft":

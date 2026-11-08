@@ -68,6 +68,12 @@ def panel_embed(mod,key,user_id=None):
         e.add_field(name="Winning duo",value="2x Nitro — one prize for each player on the champion team.",inline=False)
         e.add_field(name="Participant giveaway",value="1x Nitro Basic Wheel Spin. Every player must play all matches assigned to their team. Winning the tournament is not required.",inline=False)
         e.add_field(name="CraftCoin leaderboard",value="The participant with the highest CraftCoin balance at tournament end receives a special in-game reward when the new season starts.",inline=False)
+        champion=mod.db.execute("SELECT value FROM cc_tournament_settings WHERE key='champion_team_id'").fetchone()
+        if champion:
+            winner_team=tc.team(mod.db,int(champion["value"]))
+            claims=mod.db.execute("SELECT username,claim_status FROM cc_champion_prize_claims WHERE team_id=?",(winner_team["id"],)).fetchall()
+            claim_map={x["username"].casefold():x["claim_status"] for x in claims}
+            e.add_field(name="Champion duo Nitro claims",value="\n".join(f"{x} · {claim_map.get(x.casefold(),'unclaimed')}" for x in (winner_team["player1"],winner_team["player2"])),inline=False)
         draw=mod.db.execute("SELECT username,claim_status FROM cc_giveaway_draws ORDER BY id DESC LIMIT 1").fetchone()
         e.add_field(name="Participant giveaway status",value=f"Winner: {draw['username']} · {draw['claim_status']}" if draw else "Not drawn yet.",inline=False)
     elif key=="gamemodes":
@@ -87,7 +93,9 @@ def panel_embed(mod,key,user_id=None):
             score=f" · {m['score_a']}-{m['score_b']}" if m["score_a"] is not None else ""
             ref=f" · Ref: {m['referee']}" if m["referee"] else ""
             winner=f" · Winner: {m['winner_name']}" if m["winner_name"] else ""
-            lines.append(f"**{m['match_key']}** · {m['team_a_name']} vs {m['team_b_name']}{score}{winner}{ref}")
+            state=tc.draft(mod.db,m["match_key"])
+            modes=f" · Modes: {', '.join(x['gamemode'] for x in state['selections'])}" if state["selections"] else ""
+            lines.append(f"**{m['match_key']}** · {m['team_a_name']} vs {m['team_b_name']}{score}{winner}{ref}{modes}")
         e.description="\n".join(lines)[:4000] or "Bracket is not initialised."
         e.set_footer(text="Use /match view or /match result for individual match management.")
     elif key=="draft":
@@ -110,6 +118,12 @@ def panel_embed(mod,key,user_id=None):
                 e.add_field(name="Your linked account",value=link["username"],inline=True)
                 e.add_field(name="Balance",value=f"{wallet['balance']} CC",inline=True)
                 e.add_field(name="Currently wagered",value=f"{pending} CC",inline=True)
+                tx=tc.coin_history(mod.db,user_id,5)
+                bets=mod.db.execute("SELECT b.amount,b.payout,m.status FROM bets b JOIN matches m ON m.id=b.match_id WHERE b.user_id=? AND b.settled=1",(user_id,)).fetchall()
+                completed=[x for x in bets if x["status"]=="done"]
+                wins=sum(1 for x in completed if x["payout"]>x["amount"])
+                profit=sum(x["payout"]-x["amount"] for x in completed)
+                e.add_field(name="Betting record",value=f"{wins} wins · {len(completed)-wins} losses · {round(100*wins/len(completed),1) if completed else 0}% accuracy · net {profit:+} CC",inline=False)
                 tx=tc.coin_history(mod.db,user_id,5)
                 e.add_field(name="Recent transactions",value="\n".join(f"{x['delta']:+} · {x['reason']} · balance {x['balance_after']}" for x in tx) or "No transactions.",inline=False)
             else:e.add_field(name="Wallet",value="Your Discord account is not linked to a tournament Minecraft username.",inline=False)

@@ -189,6 +189,20 @@ class PanelNavView(discord.ui.View):
             button.callback=callback
             self.add_item(button)
 
+async def refresh_selected_panels(mod,keys):
+    for key in keys:
+        row=mod.db.execute("SELECT * FROM cc_panel_messages WHERE panel_key=?",(key,)).fetchone()
+        if not row:
+            continue
+        try:
+            channel=mod.bot.get_channel(row["channel_id"]) or await mod.bot.fetch_channel(row["channel_id"])
+            message=await channel.fetch_message(row["message_id"])
+            await message.edit(embed=panel_embed(mod,key),view=PanelNavView(mod))
+        except discord.NotFound:
+            log.warning("Panel %s is missing; run /panels repair",key)
+        except Exception:
+            log.exception("Could not refresh panel %s after an update",key)
+
 async def publish_announcement(mod,category,title,content,actor_id=None):
     channel_row=mod.db.execute("SELECT value FROM cc_tournament_settings WHERE key='announcement_channel'").fetchone()
     channel_id=int(channel_row["value"]) if channel_row else None
@@ -205,6 +219,16 @@ async def publish_announcement(mod,category,title,content,actor_id=None):
         mod.db.execute("INSERT INTO cc_announcements(category,title,content,channel_id,message_id,actor_id,created_at) VALUES(?,?,?,?,?,?,?)",
                        (category,title,content,channel_id,message_id,actor_id,tc.now()))
         tc.audit(mod.db,"announcement_created",{"category":category,"title":title,"message_id":message_id},actor_id)
+    affected={
+        "match_result":("home","bracket","matches","draft","leaderboard","giveaway","hall","players"),
+        "draft_complete":("home","draft"),
+        "giveaway":("home","giveaway"),
+        "prize_claim":("home","prizes","hall"),
+        "prize_delivery":("home","prizes","hall"),
+        "registration":("home","information","teams"),
+        "staff":("home","information"),
+    }.get(category,("home",))
+    await refresh_selected_panels(mod,affected)
     return message_id
 
 async def refresh_panels(mod,repair=False):

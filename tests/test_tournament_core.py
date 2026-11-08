@@ -194,10 +194,13 @@ class TournamentCoreTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT balance FROM players WHERE user_id=123").fetchone()[0], 987)
         self.assertEqual(tc.get_match(self.db, "R1-L1")["status"], "ready")
 
-    def test_import_same_roster_is_idempotent(self):
-        self.initialise()
+    def test_import_same_roster_is_idempotent_before_bracket_launch(self):
+        self.assertEqual(tc.seed_initial_teams(self.db), 16)
         rows = [{"name": n, "player1": a, "player2": b} for n, a, b in tc.INITIAL]
         self.assertEqual(tc.import_teams(self.db, rows), 0)
+        tc.initialise_bracket(self.db)
+        with self.assertRaises(ValueError):
+            tc.import_teams(self.db, rows)
 
 
 if __name__ == "__main__":

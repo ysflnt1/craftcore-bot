@@ -76,11 +76,20 @@ def install(mod):
 
         try:
             db.execute("BEGIN IMMEDIATE")
-            locked_match = mod.get_match(mid)
-            locked_player = mod.get_player(uid)
+            if getattr(db, "is_postgres", False):
+                locked_match = db.execute("SELECT * FROM matches WHERE id=? FOR UPDATE", (mid,)).fetchone()
+            else:
+                locked_match = mod.get_match(mid)
             if not locked_match or locked_match["status"] != "open":
                 db.rollback()
                 return False, "Predictions for this match are closed."
+            if getattr(db, "is_postgres", False):
+                locked_player = db.execute("SELECT * FROM players WHERE user_id=? FOR UPDATE", (uid,)).fetchone()
+            else:
+                locked_player = mod.get_player(uid)
+            if not locked_player:
+                db.rollback()
+                return False, "Your CraftCoin wallet could not be loaded."
             locked_old = mod.q1("SELECT * FROM bets WHERE match_id=? AND user_id=?", (mid, uid))
             if locked_old and locked_old["settled"]:
                 db.rollback()

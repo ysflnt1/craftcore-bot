@@ -485,7 +485,7 @@ def export_teams(db,fmt="json"):
         return out.getvalue()
     return json.dumps({"tournament":NAME,"teams":rows},ensure_ascii=False,indent=2)
 def export_bracket(db):
-    values=[{k:m[k] for k in ("match_key","winner_team_id","score_a","score_b","result_type","referee")} for m in bracket(db)]
+    values=[{k:m[k] for k in ("match_key","winner_team_id","score_a","score_b","result_type","referee","forfeit_team_id","disqualified_team_id")} for m in bracket(db)]
     return json.dumps({"version":1,"tournament":NAME,"teams":teams(db),"matches":values},ensure_ascii=False,indent=2)
 def import_bracket(db,raw,actor=None):
     try: obj=json.loads(raw.decode("utf-8-sig") if isinstance(raw,bytes) else raw)
@@ -511,12 +511,19 @@ def import_bracket(db,raw,actor=None):
         if x is not None and (not isinstance(x,int) or not isinstance(y,int) or min(x,y)<0 or x==y): raise ValueError(f"Invalid scores in {key}.")
         if x is not None and typ=="normal" and win!=(ta if x>y else tb): raise ValueError(f"Winner and scores disagree in {key}.")
         if win is not None and typ not in ("normal","forfeit","disqualification","override"): raise ValueError(f"Invalid result type in {key}.")
-        if win is None and (x is not None or typ is not None): raise ValueError(f"Result data without winner in {key}.")
+        ft=it.get("forfeit_team_id"); dt=it.get("disqualified_team_id")
+        if typ=="forfeit" and ft not in (ta,tb): raise ValueError(f"Invalid forfeiting team in {key}.")
+        if typ=="forfeit" and ft==win: raise ValueError(f"Forfeiting team cannot be the winner in {key}.")
+        if typ!="forfeit" and ft is not None: raise ValueError(f"Unexpected forfeit team in {key}.")
+        if typ=="disqualification" and dt not in (ta,tb): raise ValueError(f"Invalid disqualified team in {key}.")
+        if typ=="disqualification" and dt==win: raise ValueError(f"Disqualified team cannot be the winner in {key}.")
+        if typ!="disqualification" and dt is not None: raise ValueError(f"Unexpected disqualified team in {key}.")
+        if win is None and (x is not None or typ is not None or ft is not None or dt is not None): raise ValueError(f"Result data without winner in {key}.")
     with db:
         for key,*_ in DEFS:
             it=mm[key]; old=get_match(db,key)
             db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(key,"backup_import",actor,json.dumps(snapshot(old),sort_keys=True),json.dumps(it,sort_keys=True),now()))
-            db.execute("UPDATE cc_bracket_matches SET winner_team_id=?,score_a=?,score_b=?,result_type=?,referee=?,status=?,updated_at=? WHERE match_key=?",(it.get("winner_team_id"),it.get("score_a"),it.get("score_b"),it.get("result_type"),it.get("referee"),"completed" if it.get("winner_team_id") is not None else "ready",now(),key))
+            db.execute("UPDATE cc_bracket_matches SET winner_team_id=?,score_a=?,score_b=?,result_type=?,referee=?,forfeit_team_id=?,disqualified_team_id=?,status=?,updated_at=? WHERE match_key=?",(it.get("winner_team_id"),it.get("score_a"),it.get("score_b"),it.get("result_type"),it.get("referee"),it.get("forfeit_team_id"),it.get("disqualified_team_id"),"completed" if it.get("winner_team_id") is not None else "ready",now(),key))
         refresh(db); audit(db,"bracket_backup_imported",{"matches":15},actor)
 
 def record_coin(db,user_id,delta,reason,actor=None,match_id=None):

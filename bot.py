@@ -242,16 +242,18 @@ def match_embed(mid):
         title=f"{m['round']}: {ra['name']} vs {rb['name']}",
         colour=colours.get(m["status"], discord.Colour.greyple()),
     )
-    e.add_field(
-        name=f"🅰️ {ra['name']}",
-        value=f"<@{ra['p1']}> + <@{ra['p2']}>",
-        inline=True,
-    )
-    e.add_field(
-        name=f"🅱️ {rb['name']}",
-        value=f"<@{rb['p1']}> + <@{rb['p2']}>",
-        inline=True,
-    )
+    cc_a = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (ta,))
+    cc_b = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (tb,))
+    if cc_a:
+        label_a = " + ".join(x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot",(cc_a["id"],)))
+    else:
+        label_a = f"<@{ra['p1']}> + <@{ra['p2']}>"
+    if cc_b:
+        label_b = " + ".join(x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot",(cc_b["id"],)))
+    else:
+        label_b = f"<@{rb['p1']}> + <@{rb['p2']}>"
+    e.add_field(name=f"🅰️ {ra['name']}",value=label_a,inline=True)
+    e.add_field(name=f"🅱️ {rb['name']}",value=label_b,inline=True)
     e.add_field(name="Status", value=STATUS_TEXT.get(m["status"], m["status"]), inline=False)
     p = pool(mid)
     e.add_field(

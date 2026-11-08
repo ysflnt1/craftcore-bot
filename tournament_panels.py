@@ -37,8 +37,10 @@ def _coin_metrics(mod):
         completed=[b for b in bets if b["status"]=="done"]
         wins=sum(1 for b in completed if b["payout"]>b["amount"])
         profit=sum(b["payout"]-b["amount"] for b in completed)
+        losses=sum(max(0,b["amount"]-b["payout"]) for b in completed)
+        earnings=sum(b["payout"] for b in completed if b["payout"]>b["amount"])
         output.append({"username":row["username"],"balance":row["balance"],"profit":profit,
-                       "bets":len(completed),"wins":wins,
+                       "losses":losses,"earnings":earnings,"bets":len(completed),"wins":wins,
                        "accuracy":round(100*wins/len(completed),1) if completed else 0.0})
     return output
 
@@ -138,9 +140,11 @@ def panel_embed(mod,key,user_id=None):
         balance=sorted(metrics,key=lambda x:(-x["balance"],x["username"].casefold()))
         profit=sorted(metrics,key=lambda x:(-x["profit"],x["username"].casefold()))
         accuracy=sorted((x for x in metrics if x["bets"]),key=lambda x:(-x["accuracy"],-x["bets"],x["username"].casefold()))
+        biggest_losses=sorted(metrics,key=lambda x:(-x["losses"],x["username"].casefold()))
         e.add_field(name="Highest balances",value="\n".join(f"{i}. {x['username']} · {x['balance']} CC" for i,x in enumerate(balance[:10],1)) or "No linked wallets.",inline=False)
         e.add_field(name="Biggest net profits",value="\n".join(f"{i}. {x['username']} · {x['profit']:+} CC" for i,x in enumerate(profit[:5],1)) or "No settled bets.",inline=True)
-        e.add_field(name="Best prediction accuracy",value="\n".join(f"{i}. {x['username']} · {x['accuracy']}% ({x['bets']})" for i,x in enumerate(accuracy[:5],1)) or "No settled bets.",inline=True)
+        e.add_field(name="Biggest net losses",value="\n".join(f"{i}. {x['username']} · -{x['losses']} CC" for i,x in enumerate(biggest_losses[:5],1)) or "No settled bets.",inline=True)
+        e.add_field(name="Best prediction accuracy",value="\n".join(f"{i}. {x['username']} · {x['accuracy']}% ({x['bets']})" for i,x in enumerate(accuracy[:5],1)) or "No settled bets.",inline=False)
     elif key=="giveaway":
         status=tc.giveaway_eligibility(mod.db)
         eligible=sum(1 for x in status if x["status"]=="eligible")

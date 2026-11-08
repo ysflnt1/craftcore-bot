@@ -386,6 +386,13 @@ async def finish_match(mid, winner, forfeit_team=None):
         match_data = get_match(mid)
         if not match_data or match_data["status"] in ("done", "cancelled"):
             raise ValueError("This match has already been completed or cancelled.")
+        disputed = db.execute(
+            """SELECT d.match_key FROM cc_match_disputes d
+               JOIN cc_bracket_matches b ON b.match_key=d.match_key
+               WHERE b.legacy_match_id=? AND d.status='open' LIMIT 1""", (mid,)
+        ).fetchone()
+        if disputed:
+            raise ValueError("This match has an open dispute; wagers cannot be settled until staff resolve it.")
 
         bets = db.execute(
             "SELECT * FROM bets WHERE match_id=? AND settled=0", (mid,)
@@ -424,6 +431,23 @@ async def finish_match(mid, winner, forfeit_team=None):
     except Exception:
         db.rollback()
         raise
+
+    # Reconcile the settled legacy gameplay match into the Minecraft bracket.
+    try:
+        import tournament_core
+        wa, wb = game_wins(mid)
+        tournament_core.sync_legacy_result(
+            db, mid, winner, forfeit_team,
+            None if forfeit_team is not None else wa,
+            None if forfeit_team is not None else wb,
+        )
+        sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+        if sync_bracket:
+            await sync_bracket()
+    except Exception:
+        # The legacy match and wallet settlement are already committed. Log a
+        # reconciliation problem so staff can recover from the persistent match.
+        log.exception("Could not synchronise legacy match %s into the tournament bracket", mid)
 
     stats = (len(bets), correct, paid)
     posted = await post_result(mid, stats)
@@ -1124,6 +1148,13 @@ async def giveaway_draw(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
+    sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+    if sync_bracket:
+        try:
+            created = await sync_bracket()
+            log.info("Tournament bridge ready; created %s new legacy match records", created)
+        except Exception:
+            log.exception("Could not restore the tournament-to-betting match bridge")
 
 
 import public_betting

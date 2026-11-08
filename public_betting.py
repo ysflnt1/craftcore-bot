@@ -20,7 +20,12 @@ def install(mod):
     bot = mod.bot
 
     def ensure_player(user_id):
-        """Create a wallet automatically for any server member."""
+        """Create a wallet only for a Discord account linked to a roster player."""
+        link = db.execute(
+            "SELECT username FROM cc_discord_links WHERE discord_id=?", (user_id,)
+        ).fetchone()
+        if not link:
+            return None
         db.execute(
             "INSERT OR IGNORE INTO players(user_id, balance) VALUES(?, ?)",
             (user_id, mod.START_COINS),
@@ -43,11 +48,16 @@ def install(mod):
             return False, "Wager must be at least 1 CraftCoin."
 
         player = ensure_player(uid)
+        if not player:
+            return False, "Link your Discord account to a registered Minecraft participant first. Ask tournament staff to use /participant link."
 
         old = mod.q1(
             "SELECT * FROM bets WHERE match_id=? AND user_id=?",
             (mid, uid),
         )
+
+        if old and old["settled"]:
+            return False, "This match already has a settled wager for your account."
 
         available = player["balance"] + (old["amount"] if old else 0)
 
@@ -56,32 +66,41 @@ def install(mod):
                 f"You only have **{available}** CraftCoins available."
             )
 
-        if old:
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            locked_match = mod.get_match(mid)
+            locked_player = mod.get_player(uid)
+            if not locked_match or locked_match["status"] != "open":
+                db.rollback()
+                return False, "Predictions for this match are closed."
+            locked_old = mod.q1("SELECT * FROM bets WHERE match_id=? AND user_id=?", (mid, uid))
+            if locked_old and locked_old["settled"]:
+                db.rollback()
+                return False, "This match already has a settled wager for your account."
+            locked_available = locked_player["balance"] + (locked_old["amount"] if locked_old else 0)
+            if amount > locked_available:
+                db.rollback()
+                return False, f"You only have **{locked_available}** CraftCoins available."
+            if locked_old:
+                db.execute("UPDATE players SET balance=balance+? WHERE user_id=?", (locked_old["amount"], uid))
             db.execute(
-                "UPDATE players SET balance=balance+? WHERE user_id=?",
-                (old["amount"], uid),
+                "UPDATE players SET balance=balance-? WHERE user_id=? AND balance>=?",
+                (amount, uid, amount),
             )
-
-        db.execute(
-            "UPDATE players SET balance=balance-? WHERE user_id=?",
-            (amount, uid),
-        )
-
-        db.execute(
-            """
-            INSERT INTO bets(match_id,user_id,team_id,amount)
-            VALUES(?,?,?,?)
-            ON CONFLICT(match_id,user_id)
-            DO UPDATE SET
-                team_id=excluded.team_id,
-                amount=excluded.amount,
-                settled=0,
-                payout=0
-            """,
-            (mid, uid, team_id, amount),
-        )
-
-        db.commit()
+            if db.execute("SELECT changes()").fetchone()[0] != 1:
+                raise ValueError("Insufficient CraftCoins.")
+            db.execute(
+                """INSERT INTO bets(match_id,user_id,team_id,amount)
+                   VALUES(?,?,?,?)
+                   ON CONFLICT(match_id,user_id)
+                   DO UPDATE SET team_id=excluded.team_id,amount=excluded.amount,settled=0,payout=0""",
+                (mid, uid, team_id, amount),
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("Could not place bet for user %s on match %s", uid, mid)
+            return False, "Your wager could not be saved. No balance was changed."
 
         note = " (replaced your previous wager)" if old else ""
 
@@ -106,8 +125,12 @@ def install(mod):
                 ephemeral=True,
             )
 
-        # Automatically create a wallet on first betting interaction.
-        ensure_player(interaction.user.id)
+        # Wallets are available only to linked tournament participants.
+        if not ensure_player(interaction.user.id):
+            return await interaction.response.send_message(
+                "Only linked tournament participants can place wagers. Ask staff to use /participant link.",
+                ephemeral=True,
+            )
 
         await interaction.response.send_modal(
             mod.BetModal(self.match_id, self.side)
@@ -122,6 +145,11 @@ def install(mod):
 
         target = user or interaction.user
         player = ensure_player(target.id)
+        if not player:
+            return await interaction.response.send_message(
+                "You need to be linked to a registered Minecraft participant before using a CraftCoin wallet.",
+                ephemeral=True,
+            )
 
         pending = mod.pending_total(target.id)
 
@@ -148,6 +176,11 @@ def install(mod):
 
     async def show_balance(interaction):
         player = ensure_player(interaction.user.id)
+        if not player:
+            return await interaction.response.send_message(
+                "You need to be linked to a registered Minecraft participant before using a CraftCoin wallet.",
+                ephemeral=True,
+            )
         pending = mod.pending_total(interaction.user.id)
 
         await interaction.response.send_message(
@@ -298,7 +331,7 @@ def install(mod):
 
         embed.add_field(
             name="👥 Who Can Bet?",
-            value="Everyone in this Discord server.",
+            value="Registered tournament participants with a linked Discord wallet.",
             inline=False,
         )
 

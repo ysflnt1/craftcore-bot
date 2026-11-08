@@ -1130,7 +1130,7 @@ def giveaway_status():
     return eligible, pending, out
 
 
-@giveaway.command(name="status", description="Staff: who is eligible for the participant giveaway")
+@giveaway.command(name="status_legacy", description="Legacy Discord-member giveaway status")
 @staff_only
 async def giveaway_list(interaction: discord.Interaction):
     el, pe, out = giveaway_status()
@@ -1144,7 +1144,7 @@ async def giveaway_list(interaction: discord.Interaction):
     )
 
 
-@giveaway.command(name="draw", description="Staff: randomly pick a winner from eligible participants")
+@giveaway.command(name="draw_legacy", description="Legacy Discord-member giveaway draw")
 @staff_only
 async def giveaway_draw(interaction: discord.Interaction):
     el, _, _ = giveaway_status()

@@ -105,13 +105,18 @@ class OwnerConfirm(discord.ui.View):
         return True
 
 class ResultConfirm(OwnerConfirm):
-    def __init__(self,mod,owner,key,winner,sa,sb,typ,ref):
-        super().__init__(owner); self.mod,self.key,self.winner,self.sa,self.sb,self.typ,self.ref=mod,key,winner,sa,sb,typ,ref
-    @discord.ui.button(label="Confirm and clear dependent results",style=discord.ButtonStyle.danger)
+    def __init__(self,mod,owner,key,winner,sa,sb,typ,ref,forfeit_team=None,disqualified_team=None):
+        super().__init__(owner)
+        self.mod,self.key,self.winner,self.sa,self.sb,self.typ,self.ref=mod,key,winner,sa,sb,typ,ref
+        self.forfeit_team,self.disqualified_team=forfeit_team,disqualified_team
+    @discord.ui.button(label="Confirm result change and refund dependent wagers",style=discord.ButtonStyle.danger)
     async def confirm(self,interaction,button):
-        try:cleared=tc.set_result(self.mod.db,self.key,self.winner,self.sa,self.sb,self.typ,self.ref,interaction.user.id,True)
+        try:
+            cleared=tc.set_result(self.mod.db,self.key,self.winner,self.sa,self.sb,self.typ,self.ref,
+                                  interaction.user.id,True,self.forfeit_team,self.disqualified_team)
+            await self.mod.sync_tournament_bracket()
         except ValueError as ex:return await interaction.response.edit_message(content=f"Result not saved: {ex}",embed=None,view=None)
-        await interaction.response.edit_message(content=f"✅ Saved. Downstream completed matches cleared: {', '.join(cleared) if cleared else 'none'}.",embed=None,view=None)
+        await interaction.response.edit_message(content=f"✅ Saved. Downstream match records were reset and affected wagers refunded: {', '.join(cleared) if cleared else 'none'}.",embed=None,view=None)
     @discord.ui.button(label="Cancel",style=discord.ButtonStyle.secondary)
     async def cancel(self,interaction,button):
         await interaction.response.edit_message(content="Cancelled; no bracket data changed.",embed=None,view=None)

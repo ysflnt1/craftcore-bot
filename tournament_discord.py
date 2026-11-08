@@ -544,15 +544,18 @@ def install(mod):
                 completed=[b for b in bets if b["status"]=="done"]
                 wins=sum(1 for b in completed if b["payout"]>b["amount"])
                 profit=sum(b["payout"]-b["amount"] for b in completed)
-                metrics.append({"username":r["username"],"balance":r["balance"],"profit":profit,
+                losses=sum(max(0,b["amount"]-b["payout"]) for b in completed)
+                metrics.append({"username":r["username"],"balance":r["balance"],"profit":profit,"losses":losses,
                                 "accuracy":round(100*wins/len(completed),1) if completed else 0.0,"bets":len(completed)})
             by_balance=sorted(metrics,key=lambda x:(-x["balance"],x["username"].casefold()))
             by_profit=sorted(metrics,key=lambda x:(-x["profit"],x["username"].casefold()))
             by_accuracy=sorted((x for x in metrics if x["bets"]),key=lambda x:(-x["accuracy"],-x["bets"],x["username"].casefold()))
+            by_loss=sorted(metrics,key=lambda x:(-x["losses"],x["username"].casefold()))
             e=discord.Embed(title="CRAFTCOIN · PARTICIPANT LEADERBOARDS",colour=discord.Colour.gold())
             e.add_field(name="Highest balances",value="\n".join(f"{i}. {x['username']} · {x['balance']}" for i,x in enumerate(by_balance[:10],1)) or "No linked wallets",inline=False)
             e.add_field(name="Biggest net profit",value="\n".join(f"{i}. {x['username']} · {x['profit']:+}" for i,x in enumerate(by_profit[:5],1)) or "No settled bets",inline=True)
-            e.add_field(name="Best prediction accuracy",value="\n".join(f"{i}. {x['username']} · {x['accuracy']}% ({x['bets']} bets)" for i,x in enumerate(by_accuracy[:5],1)) or "No settled bets",inline=True)
+            e.add_field(name="Biggest net losses",value="\n".join(f"{i}. {x['username']} · -{x['losses']}" for i,x in enumerate(by_loss[:5],1)) or "No settled bets",inline=True)
+            e.add_field(name="Best prediction accuracy",value="\n".join(f"{i}. {x['username']} · {x['accuracy']}% ({x['bets']} bets)" for i,x in enumerate(by_accuracy[:5],1)) or "No settled bets",inline=False)
             await interaction.response.send_message(embed=e,ephemeral=True)
 
         @cg.command(name="remove",description="Staff: remove CraftCoins from a participant wallet")

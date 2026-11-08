@@ -678,6 +678,54 @@ def install(mod):
         rows=mod.db.execute("SELECT * FROM cc_awards ORDER BY award_key").fetchall()
         await interaction.response.send_message("\n".join(f"**{r['award_key']}** · {r['username']} · {r['description'] or ''}" for r in rows)[:1800] or "No awards recorded.",ephemeral=True)
 
+    @bot.tree.command(name="bet",description="Open the wager form for a fixed tournament bracket match")
+    @app_commands.choices(side=[app_commands.Choice(name="Team A",value="a"),app_commands.Choice(name="Team B",value="b")])
+    @app_commands.guild_only()
+    async def bet_cmd(interaction,match_id:app_commands.Range[int,1,1000000],side:app_commands.Choice[str]):
+        bracket_match=mod.db.execute("SELECT match_key FROM cc_bracket_matches WHERE legacy_match_id=?",(match_id,)).fetchone()
+        legacy=mod.get_match(match_id)
+        if not bracket_match or not legacy:
+            return await interaction.response.send_message("That is not a match in the fixed tournament bracket.",ephemeral=True)
+        if legacy["status"]!="open":
+            return await interaction.response.send_message("Betting is closed for this match.",ephemeral=True)
+        if not mod.db.execute("SELECT 1 FROM cc_discord_links WHERE discord_id=?",(interaction.user.id,)).fetchone():
+            return await interaction.response.send_message("Only linked tournament participants can bet. Ask staff to use /participant link.",ephemeral=True)
+        if tc.wallet_frozen(mod.db,interaction.user.id):
+            return await interaction.response.send_message("Your CraftCoin wallet is frozen. Contact tournament staff.",ephemeral=True)
+        await interaction.response.send_modal(mod.BetModal(match_id,side.value))
+
+    @bot.tree.command(name="bets",description="View your active and completed tournament wagers")
+    @app_commands.guild_only()
+    async def bets_cmd(interaction):
+        await mod.mybets_cmd(interaction)
+
+    betting_group=app_commands.Group(name="betting",description="Tournament betting status",guild_only=True)
+    bot.tree.add_command(betting_group)
+    @betting_group.command(name="status",description="View open and settled pools for tournament bracket matches")
+    async def betting_status(interaction,match_id:Optional[int]=None):
+        if match_id is not None:
+            row=mod.db.execute("SELECT match_key FROM cc_bracket_matches WHERE legacy_match_id=?",(match_id,)).fetchone()
+            legacy=mod.get_match(match_id)
+            if not row or not legacy:return await interaction.response.send_message("That is not a tournament bracket match.",ephemeral=True)
+            pools=mod.pool(match_id)
+            await interaction.response.send_message(
+                f"**{row['match_key']} · Match #{match_id}** · {legacy['status']}\n"
+                f"{mod.tn(legacy['team_a'])}: {pools['team_a'][0]} wagers · {pools['team_a'][1]} CC\n"
+                f"{mod.tn(legacy['team_b'])}: {pools['team_b'][0]} wagers · {pools['team_b'][1]} CC",
+                ephemeral=True,
+            )
+        else:
+            lines=[]
+            for m in tc.bracket(mod.db):
+                if not m.get("legacy_match_id"):
+                    lines.append(f"{m['match_key']} · {m['team_a_name']} vs {m['team_b_name']} · betting unavailable until both duos are linked")
+                    continue
+                legacy=mod.get_match(m["legacy_match_id"])
+                if not legacy:continue
+                pool=mod.pool(m["legacy_match_id"])
+                lines.append(f"{m['match_key']} · {legacy['status']} · {pool['team_a'][0]+pool['team_b'][0]} wagers")
+            await interaction.response.send_message("\n".join(lines)[:1800] or "Bracket has not been initialised.",ephemeral=True)
+
     # The existing /match group remains the live match and betting interface.
     mg=bot.tree.get_command("match")
     if isinstance(mg,app_commands.Group):

@@ -21,16 +21,20 @@ def install(mod):
     bot = mod.bot
 
     def ensure_player(user_id):
-        """Create a wallet for any Discord server member on first use."""
-        existed = mod.get_player(user_id)
-        db.execute(
-            "INSERT OR IGNORE INTO players(user_id, balance) VALUES(?, ?)",
-            (user_id, mod.START_COINS),
-        )
-        db.commit()
-        if not existed:
-            tc.record_coin(db, user_id, mod.START_COINS, "starting_balance")
+        """Create a CraftCoin wallet for any Discord user on first use."""
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            inserted = db.execute(
+                "INSERT OR IGNORE INTO players(user_id, balance) VALUES(?, ?)",
+                (user_id, mod.START_COINS),
+            )
+            if inserted.rowcount == 1:
+                tc.record_coin(db, user_id, mod.START_COINS, "starting_balance")
             db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("Could not create CraftCoin wallet for Discord user %s", user_id)
+            return None
         return mod.get_player(user_id)
 
     def public_place_bet(uid, mid, team_id, amount):
@@ -160,7 +164,7 @@ def install(mod):
         player = ensure_player(target.id)
         if not player:
             return await interaction.response.send_message(
-                "You need to be linked to a registered Minecraft participant before using a CraftCoin wallet.",
+                "Your CraftCoin wallet could not be loaded. Please try again.",
                 ephemeral=True,
             )
 
@@ -344,7 +348,7 @@ def install(mod):
 
         embed.add_field(
             name="👥 Who Can Bet?",
-            value="Registered tournament participants with a linked Discord wallet.",
+            value="Anyone in this Discord server can join and place a wager.",
             inline=False,
         )
 

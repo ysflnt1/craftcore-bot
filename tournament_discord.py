@@ -446,8 +446,8 @@ def install(mod):
             target=member or interaction.user
             if target.id!=interaction.user.id and not staff(mod,interaction):
                 return await interaction.response.send_message("Only staff can view another player's wallet history.",ephemeral=True)
-            if not mod.db.execute("SELECT 1 FROM cc_discord_links WHERE discord_id=?",(target.id,)).fetchone():
-                return await interaction.response.send_message("That Discord account is not linked to a tournament participant.",ephemeral=True)
+            if not mod.ensure_player(target.id):
+                return await interaction.response.send_message("The CraftCoin wallet could not be loaded.",ephemeral=True)
             rows=tc.coin_history(mod.db,target.id)
             if not rows:return await interaction.response.send_message("No CraftCoin transactions recorded yet.",ephemeral=True)
             lines=[f"{r['created_at']} · {r['delta']:+} · {r['reason']} · balance {r['balance_after']}" for r in rows]
@@ -537,20 +537,22 @@ def install(mod):
             target=member or interaction.user
             if target.id!=interaction.user.id and not staff(mod,interaction):
                 return await interaction.response.send_message("Only staff can view another participant's wallet.",ephemeral=True)
+            wallet=mod.ensure_player(target.id)
+            if not wallet:return await interaction.response.send_message("The CraftCoin wallet could not be loaded.",ephemeral=True)
             link=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(target.id,)).fetchone()
-            wallet=mod.get_player(target.id)
-            if not link or not wallet:return await interaction.response.send_message("That account is not linked to a tournament participant wallet.",ephemeral=True)
+            display=link["username"] if link else target.display_name
             pending=mod.pending_total(target.id)
             await interaction.response.send_message(
-                f"**{link['username']}** · **{wallet['balance']}** CraftCoins"
+                f"**{display}** · **{wallet['balance']}** CraftCoins"
                 +(f" · {pending} currently wagered" if pending else ""),
                 ephemeral=True,
             )
 
         @cg.command(name="leaderboard",description="View participant balances, profit and prediction accuracy")
         async def coins_leaderboard(interaction):
-            rows=mod.db.execute("""SELECT p.user_id,p.balance,l.username FROM players p
-                                   JOIN cc_discord_links l ON l.discord_id=p.user_id""").fetchall()
+            rows=mod.db.execute("""SELECT p.user_id,p.balance,
+                                   COALESCE(l.username,'Discord ' || CAST(p.user_id AS TEXT)) AS username
+                                   FROM players p LEFT JOIN cc_discord_links l ON l.discord_id=p.user_id""").fetchall()
             metrics=[]
             for r in rows:
                 bets=mod.db.execute("""SELECT b.amount,b.payout,m.status FROM bets b JOIN matches m ON m.id=b.match_id
@@ -764,8 +766,8 @@ def install(mod):
             return await interaction.response.send_message("That is not a match in the fixed tournament bracket.",ephemeral=True)
         if legacy["status"]!="open":
             return await interaction.response.send_message("Betting is closed for this match.",ephemeral=True)
-        if not mod.db.execute("SELECT 1 FROM cc_discord_links WHERE discord_id=?",(interaction.user.id,)).fetchone():
-            return await interaction.response.send_message("Only linked tournament participants can bet. Ask staff to use /participant link.",ephemeral=True)
+        if not mod.ensure_player(interaction.user.id):
+            return await interaction.response.send_message("Your CraftCoin wallet could not be created. Please try again.",ephemeral=True)
         if tc.wallet_frozen(mod.db,interaction.user.id):
             return await interaction.response.send_message("Your CraftCoin wallet is frozen. Contact tournament staff.",ephemeral=True)
         await interaction.response.send_modal(mod.BetModal(match_id,side.value))

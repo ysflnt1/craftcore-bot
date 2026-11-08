@@ -12,6 +12,8 @@ import re
 import sqlite3
 from typing import Optional
 
+from database import connect_database
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -67,7 +69,7 @@ log = logging.getLogger("craftcore")
 # --------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------
-db = sqlite3.connect(DB_PATH)
+db = connect_database(os.getenv("DATABASE_URL"), DB_PATH)
 db.row_factory = sqlite3.Row
 db.executescript(
     """

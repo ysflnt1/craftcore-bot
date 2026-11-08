@@ -172,7 +172,7 @@ def install(mod):
         await interaction.response.send_message(f"✅ Updated **{name}**. Fixed bracket positions are unchanged.",ephemeral=True)
 
     @group.command(name="delete",description="Staff: delete a team not referenced by the bracket")
-    @app_commands.autocomplete(team_id=lambda i,c:team_ac(mod,i,c))
+    @app_commands.autocomplete(team_id=bind_autocomplete(team_ac,mod))
     @mod.staff_only
     async def team_delete(interaction,team_id:str):
         if tc.locked(mod.db):return await interaction.response.send_message("Registrations are locked.",ephemeral=True)
@@ -341,7 +341,7 @@ def install(mod):
             wallet=mod.get_player(member.id)
             await interaction.response.send_message(f"✅ Linked `{uname}` to {member.mention}. Existing wallet balance preserved: **{wallet['balance']}**.",ephemeral=True)
         @pg.command(name="unlink",description="Staff: unlink a Minecraft player without deleting their wallet")
-        @app_commands.autocomplete(minecraft_username=lambda i,c:player_ac(mod,i,c))
+        @app_commands.autocomplete(minecraft_username=bind_autocomplete(player_ac,mod))
         @mod.staff_only
         async def participant_unlink(interaction,minecraft_username:str):
             row=mod.db.execute("SELECT discord_id FROM cc_discord_links WHERE username=? COLLATE NOCASE",(minecraft_username,)).fetchone()

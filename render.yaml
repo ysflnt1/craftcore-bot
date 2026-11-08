@@ -21,6 +21,9 @@ services:
       - key: GUILD_ID
         sync: false
 
+      - key: STAFF_ROLE_IDS
+        sync: false
+
       - key: STARTING_COINS
         value: "100"
 
@@ -29,3 +32,17 @@ services:
 
       - key: DB_PATH
         value: craftcore.db
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: craftcore-db
+          property: connectionString
+
+      - key: REQUIRE_DATABASE_URL
+        value: "true"
+
+databases:
+  - name: craftcore-db
+    databaseName: craftcore
+    user: craftcore
+    plan: free

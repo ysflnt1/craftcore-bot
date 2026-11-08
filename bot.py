@@ -12,6 +12,8 @@ import re
 import sqlite3
 from typing import Optional
 
+from database import connect_database
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -67,7 +69,7 @@ log = logging.getLogger("craftcore")
 # --------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------
-db = sqlite3.connect(DB_PATH)
+db = connect_database(os.getenv("DATABASE_URL"), DB_PATH)
 db.row_factory = sqlite3.Row
 db.executescript(
     """
@@ -242,16 +244,18 @@ def match_embed(mid):
         title=f"{m['round']}: {ra['name']} vs {rb['name']}",
         colour=colours.get(m["status"], discord.Colour.greyple()),
     )
-    e.add_field(
-        name=f"🅰️ {ra['name']}",
-        value=f"<@{ra['p1']}> + <@{ra['p2']}>",
-        inline=True,
-    )
-    e.add_field(
-        name=f"🅱️ {rb['name']}",
-        value=f"<@{rb['p1']}> + <@{rb['p2']}>",
-        inline=True,
-    )
+    cc_a = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (ta,))
+    cc_b = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (tb,))
+    if cc_a:
+        label_a = " + ".join(x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot",(cc_a["id"],)))
+    else:
+        label_a = f"<@{ra['p1']}> + <@{ra['p2']}>"
+    if cc_b:
+        label_b = " + ".join(x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot",(cc_b["id"],)))
+    else:
+        label_b = f"<@{rb['p1']}> + <@{rb['p2']}>"
+    e.add_field(name=f"🅰️ {ra['name']}",value=label_a,inline=True)
+    e.add_field(name=f"🅱️ {rb['name']}",value=label_b,inline=True)
     e.add_field(name="Status", value=STATUS_TEXT.get(m["status"], m["status"]), inline=False)
     p = pool(mid)
     e.add_field(
@@ -293,8 +297,20 @@ def result_embed(mid, stats=None):
             f"  *(opponent forfeited)*" if m["forfeit_team"] else f"  ({wa} - {wb})"
         ),
     )
-    e.add_field(name=a, value=f"<@{ra['p1']}> + <@{ra['p2']}>", inline=True)
-    e.add_field(name=b, value=f"<@{rb['p1']}> + <@{rb['p2']}>", inline=True)
+    cc_a = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (m["team_a"],))
+    cc_b = q1("SELECT id FROM cc_tournament_teams WHERE legacy_team_id=?", (m["team_b"],))
+    if cc_a:
+        pa = [x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot", (cc_a["id"],))]
+        label_a = " + ".join(pa)
+    else:
+        label_a = f"<@{ra['p1']}> + <@{ra['p2']}>"
+    if cc_b:
+        pb = [x["username"] for x in q("SELECT username FROM cc_tournament_players WHERE team_id=? ORDER BY slot", (cc_b["id"],))]
+        label_b = " + ".join(pb)
+    else:
+        label_b = f"<@{rb['p1']}> + <@{rb['p2']}>"
+    e.add_field(name=a, value=label_a, inline=True)
+    e.add_field(name=b, value=label_b, inline=True)
     e.add_field(name="Draft", value=draft_text(mid, with_next=False)[:1024], inline=False)
     games = q("SELECT * FROM games WHERE match_id=? ORDER BY game_no", (mid,))
     if games:
@@ -364,7 +380,7 @@ def settle(mid, winner):
     for b in bets:
         payout = 0
         if b["team_id"] == winner:
-            payout = b["amount"] + int(round(b["amount"] * WIN_MULT))
+            payout = int(round(b["amount"] * WIN_MULT))
             correct += 1
             paid += payout
             db.execute(
@@ -380,12 +396,87 @@ def settle(mid, winner):
 
 
 async def finish_match(mid, winner, forfeit_team=None):
-    db.execute(
-        "UPDATE matches SET status='done', winner=?, forfeit_team=? WHERE id=?",
-        (winner, forfeit_team, mid),
-    )
-    db.commit()
-    stats = settle(mid, winner)
+    """Atomically record a match result and settle every outstanding wager once."""
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        if getattr(db, "is_postgres", False):
+            match_data = db.execute("SELECT * FROM matches WHERE id=? FOR UPDATE", (mid,)).fetchone()
+        else:
+            match_data = get_match(mid)
+        if not match_data or match_data["status"] in ("done", "cancelled"):
+            raise ValueError("This match has already been completed or cancelled.")
+        disputed = db.execute(
+            """SELECT d.match_key FROM cc_match_disputes d
+               JOIN cc_bracket_matches b ON b.match_key=d.match_key
+               WHERE b.legacy_match_id=? AND d.status='open' LIMIT 1""", (mid,)
+        ).fetchone()
+        if disputed:
+            raise ValueError("This match has an open dispute; wagers cannot be settled until staff resolve it.")
+
+        bets = db.execute(
+            "SELECT * FROM bets WHERE match_id=? AND settled=0", (mid,)
+        ).fetchall()
+        paid = correct = 0
+        for bet in bets:
+            payout = 0
+            if bet["team_id"] == winner:
+                payout = int(round(bet["amount"] * WIN_MULT))
+                correct += 1
+                paid += payout
+                db.execute(
+                    "UPDATE players SET balance=balance+? WHERE user_id=?",
+                    (payout, bet["user_id"]),
+                )
+            db.execute(
+                "UPDATE bets SET settled=1,payout=? WHERE match_id=? AND user_id=? AND settled=0",
+                (payout, mid, bet["user_id"]),
+            )
+            balance = db.execute(
+                "SELECT balance FROM players WHERE user_id=?", (bet["user_id"],)
+            ).fetchone()
+            if balance:
+                db.execute(
+                    """INSERT INTO cc_coin_transactions
+                       (user_id,delta,balance_after,reason,match_id,created_at)
+                       VALUES(?,?,?,?,?,datetime('now'))""",
+                    (bet["user_id"], payout, balance["balance"],
+                     "bet_won_payout" if payout else "bet_lost", mid),
+                )
+        db.execute(
+            "UPDATE matches SET status='done',winner=?,forfeit_team=? WHERE id=?",
+            (winner, forfeit_team, mid),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    # Reconcile the settled legacy gameplay match into the Minecraft bracket.
+    try:
+        import tournament_core
+        wa, wb = game_wins(mid)
+        has_score = forfeit_team is None and wa != wb
+        tournament_core.sync_legacy_result(
+            db, mid, winner, forfeit_team,
+            wa if has_score else None,
+            wb if has_score else None,
+        )
+        sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+        if sync_bracket:
+            await sync_bracket()
+        publish = getattr(__import__("sys").modules[__name__], "publish_tournament_announcement", None)
+        if publish:
+            title = f"Match result · {tn(winner)} win"
+            body = f"{tn(winner)} won {match_data['round']}."
+            if forfeit_team:
+                body = f"{tn(forfeit_team)} forfeited; {tn(winner)} advanced."
+            await publish("match_result", title, body)
+    except Exception:
+        # The legacy match and wallet settlement are already committed. Log a
+        # reconciliation problem so staff can recover from the persistent match.
+        log.exception("Could not synchronise legacy match %s into the tournament bracket", mid)
+
+    stats = (len(bets), correct, paid)
     posted = await post_result(mid, stats)
     await refresh_pred_message(mid)
     return stats, posted
@@ -426,6 +517,9 @@ def place_bet(uid, mid, team_id, amount):
 class CraftBot(commands.Bot):
     async def setup_hook(self):
         self.add_dynamic_items(BetButton)
+        panel_factory = getattr(__import__("sys").modules[__name__], "panel_view_factory", None)
+        if panel_factory:
+            self.add_view(panel_factory())
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
             self.tree.copy_global_to(guild=guild)
@@ -485,11 +579,8 @@ class BetButton(
             return await interaction.response.send_message(
                 "Predictions for this match are closed.", ephemeral=True
             )
-        p = get_player(interaction.user.id)
-        if not p:
-            return await interaction.response.send_message(
-                "Only registered participants can place wagers.", ephemeral=True
-            )
+        # Wallets are provisioned by the public betting extension when a
+        # wager is submitted; Minecraft roster linking is not required.
         await interaction.response.send_modal(BetModal(self.match_id, self.side))
 
 
@@ -500,8 +591,16 @@ def is_staff(interaction: discord.Interaction) -> bool:
     user = interaction.user
     if user.guild_permissions.administrator or user.guild_permissions.manage_guild:
         return True
-    rid = cfg_get("staff_role")
-    if rid and any(r.id == int(rid) for r in getattr(user, "roles", [])):
+    configured_ids = {
+        value.strip()
+        for value in os.getenv("STAFF_ROLE_IDS", "").split(",")
+        if value.strip()
+    }
+    legacy_id = cfg_get("staff_role")
+    if legacy_id:
+        configured_ids.add(str(legacy_id))
+    member_role_ids = {str(role.id) for role in getattr(user, "roles", [])}
+    if configured_ids.intersection(member_role_ids):
         return True
     raise app_commands.CheckFailure("staff only")
 
@@ -550,6 +649,9 @@ async def setup_cmd(
     cfg_set("predictions_channel", predictions_channel.id)
     if staff_role:
         cfg_set("staff_role", staff_role.id)
+    sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+    if sync_bracket:
+        await sync_bracket()
     await interaction.response.send_message(
         f"✅ Results → {results_channel.mention}\n"
         f"✅ Predictions → {predictions_channel.mention}"
@@ -572,8 +674,13 @@ async def participant_add(interaction: discord.Interaction, user: discord.Member
         return await interaction.response.send_message(
             f"{user.mention} is already registered.", ephemeral=True
         )
-    db.execute("INSERT INTO players(user_id,balance) VALUES(?,?)", (user.id, START_COINS))
-    db.commit()
+    with db:
+        db.execute("INSERT INTO players(user_id,balance) VALUES(?,?)", (user.id, START_COINS))
+        db.execute(
+            """INSERT INTO cc_coin_transactions(user_id,delta,balance_after,reason,actor_id,created_at)
+               VALUES(?,?,?,'starting_balance',?,datetime('now'))""",
+            (user.id, START_COINS, START_COINS, interaction.user.id),
+        )
     await interaction.response.send_message(
         f"✅ Registered {user.mention} with **{START_COINS}** CraftCoins.", ephemeral=True
     )
@@ -613,7 +720,7 @@ team = app_commands.Group(name="team", description="Manage duos", guild_only=Tru
 bot.tree.add_command(team)
 
 
-@team.command(name="create", description="Staff: create a duo (also registers the players)")
+@team.command(name="create_legacy", description="Staff: create a legacy Discord-member duo")
 @staff_only
 async def team_create(
     interaction: discord.Interaction,
@@ -640,7 +747,7 @@ async def team_create(
     )
 
 
-@team.command(name="delete", description="Staff: delete a duo (only if it has no matches)")
+@team.command(name="delete_legacy", description="Staff: delete a legacy Discord-member duo (only if it has no matches)")
 @staff_only
 @app_commands.autocomplete(name=team_ac)
 async def team_delete(interaction: discord.Interaction, name: str):
@@ -656,7 +763,7 @@ async def team_delete(interaction: discord.Interaction, name: str):
     await interaction.response.send_message(f"Deleted team **{t['name']}**.", ephemeral=True)
 
 
-@team.command(name="list", description="List all duos")
+@team.command(name="list_legacy", description="List legacy Discord-member duos")
 async def team_list(interaction: discord.Interaction):
     rows = q("SELECT * FROM teams ORDER BY name")
     if not rows:
@@ -674,7 +781,7 @@ match = app_commands.Group(name="match", description="Manage matches", guild_onl
 bot.tree.add_command(match)
 
 
-@match.command(name="create", description="Staff: create a match and open predictions")
+@match.command(name="create_legacy", description="Legacy-only: create a non-tournament match")
 @app_commands.describe(team_a="Team A (bans first)", team_b="Team B", round_name="e.g. Round 1, Semi-final")
 @app_commands.autocomplete(team_a=team_ac, team_b=team_ac)
 @staff_only
@@ -712,6 +819,8 @@ async def match_draft(interaction: discord.Interaction, match_id: int, gamemode:
     m = get_match(match_id)
     if not m or m["status"] in ("done", "cancelled"):
         return await interaction.response.send_message("Match not found or already finished.", ephemeral=True)
+    if q1("SELECT 1 FROM cc_bracket_matches WHERE legacy_match_id=?",(match_id,)):
+        return await interaction.response.send_message("This is a tournament bracket match. Use /draft start so the saved tournament draft stays in sync.",ephemeral=True)
     used = {r["gamemode"] for r in q("SELECT gamemode FROM draft WHERE match_id=?", (match_id,))}
     step = len(used) + 1
     if step > len(DRAFT_ORDER):
@@ -738,6 +847,8 @@ async def match_undo_draft(interaction: discord.Interaction, match_id: int):
     m = get_match(match_id)
     if not m:
         return await interaction.response.send_message("Match not found.", ephemeral=True)
+    if q1("SELECT 1 FROM cc_bracket_matches WHERE legacy_match_id=?",(match_id,)):
+        return await interaction.response.send_message("This is a tournament bracket match. Use /draft undo.",ephemeral=True)
     if q1("SELECT 1 FROM games WHERE match_id=?", (match_id,)):
         return await interaction.response.send_message("Scores already recorded. Undo games first.", ephemeral=True)
     last = q1("SELECT MAX(step) AS s FROM draft WHERE match_id=?", (match_id,))["s"]
@@ -763,6 +874,13 @@ async def match_game(
         return await interaction.response.send_message("Match not found or already finished.", ephemeral=True)
     if score_a == score_b:
         return await interaction.response.send_message("Scores can't be tied. One team must win each game.", ephemeral=True)
+    disputed = db.execute(
+        """SELECT 1 FROM cc_match_disputes d
+           JOIN cc_bracket_matches b ON b.match_key=d.match_key
+           WHERE b.legacy_match_id=? AND d.status='open' LIMIT 1""", (match_id,)
+    ).fetchone()
+    if disputed:
+        return await interaction.response.send_message("This match is disputed. Staff must resolve the dispute before recording more games.", ephemeral=True)
     n = q1("SELECT COUNT(*) AS c FROM games WHERE match_id=?", (match_id,))["c"] + 1
     if n > len(GAME_STEPS):
         return await interaction.response.send_message("All games already recorded.", ephemeral=True)
@@ -863,16 +981,25 @@ async def match_cancel(interaction: discord.Interaction, match_id: int):
     m = get_match(match_id)
     if not m or m["status"] in ("done", "cancelled"):
         return await interaction.response.send_message("Match not found or already finished.", ephemeral=True)
-    for b in q("SELECT * FROM bets WHERE match_id=? AND settled=0", (match_id,)):
-        db.execute("UPDATE players SET balance=balance+? WHERE user_id=?", (b["amount"], b["user_id"]))
-        db.execute(
-            "UPDATE bets SET settled=1, payout=amount WHERE match_id=? AND user_id=?",
-            (match_id, b["user_id"]),
-        )
-    db.execute("UPDATE matches SET status='cancelled' WHERE id=?", (match_id,))
-    db.commit()
+    with db:
+        for b in q("SELECT * FROM bets WHERE match_id=? AND settled=0", (match_id,)):
+            db.execute("UPDATE players SET balance=balance+? WHERE user_id=?", (b["amount"], b["user_id"]))
+            balance = get_player(b["user_id"])
+            db.execute(
+                "UPDATE bets SET settled=1, payout=amount WHERE match_id=? AND user_id=? AND settled=0",
+                (match_id, b["user_id"]),
+            )
+            db.execute(
+                """INSERT INTO cc_coin_transactions(user_id,delta,balance_after,reason,match_id,created_at)
+                   VALUES(?,?,?,'bet_refund',?,datetime('now'))""",
+                (b["user_id"], b["amount"], balance["balance"], match_id),
+            )
+        db.execute("UPDATE matches SET status='cancelled' WHERE id=?", (match_id,))
     await refresh_pred_message(match_id)
-    await interaction.response.send_message("❌ Match cancelled and all wagers refunded.", ephemeral=True)
+    sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+    if sync_bracket:
+        await sync_bracket()
+    await interaction.response.send_message("❌ Match cancelled and all wagers refunded. If it was a bracket match, a fresh betting record was created for the same pairing.", ephemeral=True)
 
 
 @match.command(name="repost_result", description="Staff: post a finished match's result to the results channel again")
@@ -981,8 +1108,11 @@ async def _adjust(interaction, user, amount, mode):
         new = max(0, p["balance"] - amount)
     else:
         new = amount
-    db.execute("UPDATE players SET balance=? WHERE user_id=?", (new, user.id))
-    db.commit()
+    delta = new - p["balance"]
+    with db:
+        db.execute("UPDATE players SET balance=? WHERE user_id=?", (new, user.id))
+        import tournament_core
+        tournament_core.record_coin(db, user.id, delta, f"staff_{mode}", interaction.user.id)
     await interaction.response.send_message(
         f"{user.mention} now has **{new}** CraftCoins.", ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
@@ -1033,7 +1163,7 @@ def giveaway_status():
     return eligible, pending, out
 
 
-@giveaway.command(name="status", description="Staff: who is eligible for the participant giveaway")
+@giveaway.command(name="status_legacy", description="Legacy Discord-member giveaway status")
 @staff_only
 async def giveaway_list(interaction: discord.Interaction):
     el, pe, out = giveaway_status()
@@ -1047,7 +1177,7 @@ async def giveaway_list(interaction: discord.Interaction):
     )
 
 
-@giveaway.command(name="draw", description="Staff: randomly pick a winner from eligible participants")
+@giveaway.command(name="draw_legacy", description="Legacy Discord-member giveaway draw")
 @staff_only
 async def giveaway_draw(interaction: discord.Interaction):
     el, _, _ = giveaway_status()
@@ -1062,10 +1192,31 @@ async def giveaway_draw(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
+    sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+    if sync_bracket:
+        try:
+            created = await sync_bracket()
+            log.info("Tournament bridge ready; created %s new legacy match records", created)
+        except Exception:
+            log.exception("Could not restore the tournament-to-betting match bridge")
+    refresh_panels = getattr(__import__("sys").modules[__name__], "refresh_tournament_panels", None)
+    if refresh_panels:
+        try:
+            updated, repaired = await refresh_panels(False)
+            log.info("Refreshed %s saved tournament panels", updated)
+        except Exception:
+            log.exception("Could not refresh saved tournament panels")
 
 
 import public_betting
-public_betting.install(__import__("sys").modules["__main__"])
+# Pass the actual bot module whether this file is executed directly or imported.
+public_betting.install(__import__("sys").modules[__name__])
+
+# Additive Minecraft-username roster, fixed bracket, and tournament draft.
+import tournament_discord
+tournament_discord.install(__import__("sys").modules[__name__])
+import tournament_panels
+tournament_panels.install(__import__("sys").modules[__name__])
 
 
 if __name__ == "__main__":

@@ -21,12 +21,7 @@ def install(mod):
     bot = mod.bot
 
     def ensure_player(user_id):
-        """Create a wallet only for a Discord account linked to a roster player."""
-        link = db.execute(
-            "SELECT username FROM cc_discord_links WHERE discord_id=?", (user_id,)
-        ).fetchone()
-        if not link:
-            return None
+        """Create a wallet for any Discord server member on first use."""
         existed = mod.get_player(user_id)
         db.execute(
             "INSERT OR IGNORE INTO players(user_id, balance) VALUES(?, ?)",
@@ -39,7 +34,7 @@ def install(mod):
         return mod.get_player(user_id)
 
     def public_place_bet(uid, mid, team_id, amount):
-        """Allow linked tournament participants to place a wager."""
+        """Allow any Discord server member to place a wager."""
 
         match_data = mod.get_match(mid)
 
@@ -56,7 +51,7 @@ def install(mod):
 
         player = ensure_player(uid)
         if not player:
-            return False, "Link your Discord account to a registered Minecraft participant first. Ask tournament staff to use /participant link."
+            return False, "Your CraftCoin wallet could not be created. Please try again."
         if tc.wallet_frozen(db, uid):
             return False, "Your CraftCoin wallet is frozen. Contact tournament staff."
 
@@ -128,9 +123,10 @@ def install(mod):
     # Replace the original betting function.
     # BetModal will now use this public version.
     mod.place_bet = public_place_bet
+    mod.ensure_player = ensure_player
 
     async def public_bet_button_callback(self, interaction):
-        """Allow only linked tournament participants to open the betting modal."""
+        """Allow any Discord server member to open the betting modal."""
 
         match_data = mod.get_match(self.match_id)
 
@@ -142,10 +138,10 @@ def install(mod):
                 ephemeral=True,
             )
 
-        # Wallets are available only to linked tournament participants.
+        # Automatically provision a wallet for every Discord server member.
         if not ensure_player(interaction.user.id):
             return await interaction.response.send_message(
-                "Only linked tournament participants can place wagers. Ask staff to use /participant link.",
+                "Your CraftCoin wallet could not be created. Please try again.",
                 ephemeral=True,
             )
 

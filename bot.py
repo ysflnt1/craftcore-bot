@@ -765,7 +765,7 @@ match = app_commands.Group(name="match", description="Manage matches", guild_onl
 bot.tree.add_command(match)
 
 
-@match.command(name="create", description="Staff: create a match and open predictions")
+@match.command(name="create_legacy", description="Legacy-only: create a non-tournament match")
 @app_commands.describe(team_a="Team A (bans first)", team_b="Team B", round_name="e.g. Round 1, Semi-final")
 @app_commands.autocomplete(team_a=team_ac, team_b=team_ac)
 @staff_only

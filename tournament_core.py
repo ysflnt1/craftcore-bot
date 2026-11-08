@@ -336,7 +336,10 @@ def _coin_ledger(db,user_id,delta,reason,match_id=None):
                (user_id,int(delta),int(row["balance"]),reason,match_id,now()))
 
 def _void_legacy_match(db,legacy_id,reason):
-    legacy=db.execute("SELECT * FROM matches WHERE id=?",(legacy_id,)).fetchone()
+    if getattr(db,"is_postgres",False):
+        legacy=db.execute("SELECT * FROM matches WHERE id=? FOR UPDATE",(legacy_id,)).fetchone()
+    else:
+        legacy=db.execute("SELECT * FROM matches WHERE id=?",(legacy_id,)).fetchone()
     if not legacy or legacy["status"]=="cancelled":
         return
     bets=db.execute("SELECT * FROM bets WHERE match_id=?",(legacy_id,)).fetchall()
@@ -354,7 +357,10 @@ def _void_legacy_match(db,legacy_id,reason):
     db.execute("UPDATE matches SET status='cancelled',winner=NULL,forfeit_team=NULL WHERE id=?",(legacy_id,))
 
 def _settle_legacy_match(db,legacy_id,winner_legacy_id,forfeit_legacy_id=None):
-    legacy=db.execute("SELECT * FROM matches WHERE id=?",(legacy_id,)).fetchone()
+    if getattr(db,"is_postgres",False):
+        legacy=db.execute("SELECT * FROM matches WHERE id=? FOR UPDATE",(legacy_id,)).fetchone()
+    else:
+        legacy=db.execute("SELECT * FROM matches WHERE id=?",(legacy_id,)).fetchone()
     if not legacy:
         raise ValueError("Linked legacy match record is missing.")
     if legacy["status"]=="cancelled":

@@ -388,6 +388,8 @@ def draft_add(db,key,mode,actor=None):
     state=draft(db,key); m=state["match"]
     if m["status"]=="completed": raise ValueError("Match is already completed.")
     if m["team_a_id"] is None or m["team_b_id"] is None: raise ValueError("Both teams must be available before drafting.")
+    if m["legacy_match_id"] and db.execute("SELECT 1 FROM games WHERE match_id=? LIMIT 1",(m["legacy_match_id"],)).fetchone():
+        raise ValueError("Draft is locked after the first game is recorded.")
     if state["complete"]: raise ValueError("Draft is complete.")
     if mode not in state["remaining"]: raise ValueError("Gamemode is already selected or invalid.")
     step=state["next_step"]; action,side=ORDER[step-1]; tid=m["team_a_id"] if side=="a" else m["team_b_id"] if side=="b" else None
@@ -395,9 +397,35 @@ def draft_add(db,key,mode,actor=None):
         db.execute("INSERT INTO cc_draft_selections(match_key,step,action,side,team_id,gamemode,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?)",(key,step,action,side,tid,mode,actor,now()))
         audit(db,"draft_selection",{"match":key,"step":step,"action":action,"team_id":tid,"gamemode":mode},actor)
     return draft(db,key)
+def draft_override(db,key,step,mode,actor=None):
+    state=draft(db,key)
+    if state["match"]["status"]=="completed":
+        raise ValueError("A completed match draft cannot be changed.")
+    if not 1<=int(step)<=9:
+        raise ValueError("Draft step must be between 1 and 9.")
+    legacy_id=state["match"]["legacy_match_id"]
+    if legacy_id and db.execute("SELECT 1 FROM games WHERE match_id=? LIMIT 1",(legacy_id,)).fetchone():
+        raise ValueError("Draft is locked after the first game is recorded.")
+    if mode not in MODES:
+        raise ValueError("Invalid gamemode.")
+    used=db.execute("SELECT step FROM cc_draft_selections WHERE match_key=? AND gamemode=?",(key,mode)).fetchone()
+    if used and used["step"]!=step:
+        raise ValueError("That gamemode is already used by another ban/pick step.")
+    action,side=ORDER[int(step)-1]
+    tid=state["match"]["team_a_id"] if side=="a" else state["match"]["team_b_id"] if side=="b" else None
+    with db:
+        old=db.execute("SELECT * FROM cc_draft_selections WHERE match_key=? AND step=?",(key,step)).fetchone()
+        db.execute("DELETE FROM cc_draft_selections WHERE match_key=? AND step=?",(key,step))
+        db.execute("INSERT INTO cc_draft_selections(match_key,step,action,side,team_id,gamemode,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                   (key,int(step),action,side,tid,mode,actor,now()))
+        audit(db,"draft_override",{"match":key,"step":int(step),"previous":old["gamemode"] if old else None,"gamemode":mode},actor)
+    return draft(db,key)
+
 def draft_undo(db,key,actor=None):
     state=draft(db,key)
     if state["match"]["status"]=="completed": raise ValueError("Completed match draft cannot be edited.")
+    if state["match"]["legacy_match_id"] and db.execute("SELECT 1 FROM games WHERE match_id=? LIMIT 1",(state["match"]["legacy_match_id"],)).fetchone():
+        raise ValueError("Draft is locked after the first game is recorded.")
     if not state["selections"]: raise ValueError("Nothing to undo.")
     last=state["selections"][-1]
     with db: db.execute("DELETE FROM cc_draft_selections WHERE match_key=? AND step=?",(key,last["step"])); audit(db,"draft_undo",{"match":key,"step":last["step"]},actor)

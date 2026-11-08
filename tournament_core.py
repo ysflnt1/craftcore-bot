@@ -157,7 +157,7 @@ def ensure_schema(db):
     db.commit()
 
 def teams(db):
-    return [dict(r) for r in db.execute("""SELECT t.id,t.name,t.seed,t.bracket_slot,MAX(CASE WHEN p.slot=1 THEN p.username END) player1,MAX(CASE WHEN p.slot=2 THEN p.username END) player2 FROM cc_tournament_teams t LEFT JOIN cc_tournament_players p ON p.team_id=t.id GROUP BY t.id ORDER BY COALESCE(t.seed,99),t.name COLLATE NOCASE""")]
+    return [dict(r) for r in db.execute("""SELECT t.id,t.name,t.seed,t.bracket_slot,t.legacy_team_id,MAX(CASE WHEN p.slot=1 THEN p.username END) player1,MAX(CASE WHEN p.slot=2 THEN p.username END) player2 FROM cc_tournament_teams t LEFT JOIN cc_tournament_players p ON p.team_id=t.id GROUP BY t.id ORDER BY COALESCE(t.seed,99),t.name COLLATE NOCASE""")]
 def team(db, key):
     if isinstance(key,int): row=db.execute("SELECT * FROM cc_tournament_teams WHERE id=?",(key,)).fetchone()
     else: row=db.execute("SELECT * FROM cc_tournament_teams WHERE name=? COLLATE NOCASE",(key,)).fetchone()

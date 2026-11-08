@@ -263,6 +263,25 @@ def install(mod):
         except ValueError as ex:return await interaction.response.send_message(f"Stopped safely: {ex}",ephemeral=True)
         created=await mod.sync_tournament_bracket()
         await interaction.response.send_message(f"✅ Added {a} initial teams. Bracket {'created' if b else 'already exists'} (15 matches). New linked betting matches: {created}.",ephemeral=True)
+    @tg.command(name="setup",description="Staff: initialise the fixed bracket after reviewing the roster")
+    @mod.staff_only
+    async def tournament_setup(interaction):
+        try:
+            seeded=tc.seed_initial_teams(mod.db,interaction.user.id)
+            created=tc.initialise_bracket(mod.db,interaction.user.id)
+            matches=await mod.sync_tournament_bracket()
+        except ValueError as ex:
+            return await interaction.response.send_message(f"Setup stopped safely: {ex}",ephemeral=True)
+        await interaction.response.send_message(f"✅ Tournament setup complete. Added {seeded} teams; bracket {'created' if created else 'already existed'}; {matches} betting matches created.",ephemeral=True)
+
+    @tg.command(name="reset",description="Staff: reset tournament bracket progress after confirmation")
+    @mod.staff_only
+    async def tournament_reset(interaction):
+        await interaction.response.send_message(
+            "This clears bracket results and drafts, refunds affected wagers, and recreates the bracket's live match records. The registered teams and existing wallet balances remain. Continue?",
+            view=ResetConfirm(mod,interaction.user.id),ephemeral=True,
+        )
+
     @tg.command(name="lock_registrations",description="Staff: lock team registrations and edits")
     @mod.staff_only
     async def lock_reg(interaction):

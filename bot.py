@@ -1127,11 +1127,12 @@ async def on_ready():
 
 
 import public_betting
-public_betting.install(__import__("sys").modules["__main__"])
+# Pass the actual bot module whether this file is executed directly or imported.
+public_betting.install(__import__("sys").modules[__name__])
 
 # Additive Minecraft-username roster, fixed bracket, and tournament draft.
 import tournament_discord
-tournament_discord.install(__import__("sys").modules["__main__"])
+tournament_discord.install(__import__("sys").modules[__name__])
 
 
 if __name__ == "__main__":

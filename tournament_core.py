@@ -51,7 +51,7 @@ def audit(db, action, details, actor=None):
 def ensure_schema(db):
     db.execute("PRAGMA foreign_keys=ON")
     db.executescript("""
-    CREATE TABLE IF NOT EXISTS cc_tournament_teams(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE COLLATE NOCASE,seed INTEGER UNIQUE CHECK(seed IS NULL OR seed BETWEEN 1 AND 16),created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS cc_tournament_teams(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE COLLATE NOCASE,seed INTEGER UNIQUE CHECK(seed IS NULL OR seed BETWEEN 1 AND 16),bracket_slot INTEGER UNIQUE CHECK(bracket_slot IS NULL OR bracket_slot BETWEEN 1 AND 16),created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS cc_tournament_players(username TEXT PRIMARY KEY COLLATE NOCASE,team_id INTEGER NOT NULL REFERENCES cc_tournament_teams(id) ON DELETE CASCADE,slot INTEGER NOT NULL CHECK(slot IN (1,2)),UNIQUE(team_id,slot));
     CREATE TABLE IF NOT EXISTS cc_discord_links(username TEXT PRIMARY KEY COLLATE NOCASE,discord_id INTEGER NOT NULL UNIQUE,linked_by INTEGER,linked_at TEXT NOT NULL,FOREIGN KEY(username) REFERENCES cc_tournament_players(username) ON DELETE CASCADE);
     CREATE TABLE IF NOT EXISTS cc_bracket_matches(match_key TEXT PRIMARY KEY,stage TEXT NOT NULL,label TEXT NOT NULL,team_a_id INTEGER REFERENCES cc_tournament_teams(id),team_b_id INTEGER REFERENCES cc_tournament_teams(id),winner_team_id INTEGER REFERENCES cc_tournament_teams(id),source_a TEXT,source_b TEXT,score_a INTEGER,score_b INTEGER,result_type TEXT,referee TEXT,status TEXT NOT NULL DEFAULT 'waiting',updated_at TEXT NOT NULL);
@@ -140,7 +140,8 @@ def ensure_schema(db):
     # Safe additive migrations for columns added after the initial deployment.
     migrations = {
         "cc_tournament_teams": {
-            "legacy_team_id": "INTEGER"
+            "legacy_team_id": "INTEGER",
+            "bracket_slot": "INTEGER"
         },
         "cc_bracket_matches": {
             "legacy_match_id": "INTEGER",
@@ -156,7 +157,7 @@ def ensure_schema(db):
     db.commit()
 
 def teams(db):
-    return [dict(r) for r in db.execute("""SELECT t.id,t.name,t.seed,MAX(CASE WHEN p.slot=1 THEN p.username END) player1,MAX(CASE WHEN p.slot=2 THEN p.username END) player2 FROM cc_tournament_teams t LEFT JOIN cc_tournament_players p ON p.team_id=t.id GROUP BY t.id ORDER BY COALESCE(t.seed,99),t.name COLLATE NOCASE""")]
+    return [dict(r) for r in db.execute("""SELECT t.id,t.name,t.seed,t.bracket_slot,MAX(CASE WHEN p.slot=1 THEN p.username END) player1,MAX(CASE WHEN p.slot=2 THEN p.username END) player2 FROM cc_tournament_teams t LEFT JOIN cc_tournament_players p ON p.team_id=t.id GROUP BY t.id ORDER BY COALESCE(t.seed,99),t.name COLLATE NOCASE""")]
 def team(db, key):
     if isinstance(key,int): row=db.execute("SELECT * FROM cc_tournament_teams WHERE id=?",(key,)).fetchone()
     else: row=db.execute("SELECT * FROM cc_tournament_teams WHERE name=? COLLATE NOCASE",(key,)).fetchone()

@@ -318,20 +318,47 @@ def set_result(db,key,winner,score_a=None,score_b=None,result_type="normal",refe
     if referee is not None: referee=clean(referee,"Referee",80)
     old=snapshot(m); new={"winner_team_id":winner,"score_a":score_a,"score_b":score_b,"result_type":result_type,"referee":referee,"forfeit_team_id":forfeit_team,"disqualified_team_id":disqualified_team,"status":"completed" if winner is not None else "ready"}
     changed=old["winner_team_id"]!=winner
-    done=[k for k in descendants(key) if get_match(db,k)["winner_team_id"] is not None] if changed else []
-    if done and not confirm: raise DownstreamResultsExist(done)
     invalid=descendants(key) if changed else []
+    affected=[]
+    done=[]
+    for child in invalid:
+        cm=get_match(db,child)
+        if cm["winner_team_id"] is not None: done.append(child)
+        draft_count=db.execute("SELECT COUNT(*) FROM cc_draft_selections WHERE match_key=?",(child,)).fetchone()[0]
+        has_bets=False
+        if cm["legacy_match_id"]:
+            has_bets=bool(db.execute("SELECT 1 FROM bets WHERE match_id=? LIMIT 1",(cm["legacy_match_id"],)).fetchone())
+        if cm["winner_team_id"] is not None or draft_count or cm["legacy_match_id"] or has_bets:
+            affected.append(child)
+    if affected and not confirm: raise DownstreamResultsExist(affected)
     with db:
         for child in invalid:
-            cm=get_match(db,child); n=db.execute("SELECT COUNT(*) FROM cc_draft_selections WHERE match_key=?",(child,)).fetchone()[0]
-            if cm["winner_team_id"] is not None or n:
-                db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(child,"downstream_invalidated",actor,json.dumps(snapshot(cm),sort_keys=True),json.dumps({"upstream":key,"draft_steps_removed":n}),now()))
-            if n: db.execute("DELETE FROM cc_draft_selections WHERE match_key=?",(child,))
-            if child in done: db.execute("UPDATE cc_bracket_matches SET winner_team_id=NULL,score_a=NULL,score_b=NULL,result_type=NULL,referee=NULL,forfeit_team_id=NULL,disqualified_team_id=NULL,status='waiting',updated_at=? WHERE match_key=?",(now(),child))
+            cm=get_match(db,child)
+            draft_count=db.execute("SELECT COUNT(*) FROM cc_draft_selections WHERE match_key=?",(child,)).fetchone()[0]
+            if cm["legacy_match_id"]:
+                _void_legacy_match(db,cm["legacy_match_id"],"downstream_match_refund")
+                db.execute("DELETE FROM draft WHERE match_id=?",(cm["legacy_match_id"],))
+                db.execute("UPDATE cc_bracket_matches SET legacy_match_id=NULL WHERE match_key=?",(child,))
+            if cm["winner_team_id"] is not None or draft_count or cm["legacy_match_id"]:
+                db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(child,"downstream_invalidated",actor,json.dumps(snapshot(cm),sort_keys=True),json.dumps({"upstream":key,"draft_steps_removed":draft_count,"legacy_match_cancelled":bool(cm["legacy_match_id"])}),now()))
+            if draft_count: db.execute("DELETE FROM cc_draft_selections WHERE match_key=?",(child,))
+            if cm["winner_team_id"] is not None:
+                db.execute("UPDATE cc_bracket_matches SET winner_team_id=NULL,score_a=NULL,score_b=NULL,result_type=NULL,referee=NULL,forfeit_team_id=NULL,disqualified_team_id=NULL,status='waiting',updated_at=? WHERE match_key=?",(now(),child))
+        if m["legacy_match_id"]:
+            if winner is None:
+                _void_legacy_match(db,m["legacy_match_id"],"match_result_undo_refund")
+                db.execute("DELETE FROM draft WHERE match_id=?",(m["legacy_match_id"],))
+                db.execute("UPDATE cc_bracket_matches SET legacy_match_id=NULL WHERE match_key=?",(key,))
+            else:
+                legacy_winner=db.execute("SELECT legacy_team_id FROM cc_tournament_teams WHERE id=?",(winner,)).fetchone()
+                if legacy_winner and legacy_winner["legacy_team_id"]:
+                    losing=forfeit_team if forfeit_team is not None else disqualified_team
+                    legacy_loser=db.execute("SELECT legacy_team_id FROM cc_tournament_teams WHERE id=?",(losing,)).fetchone() if losing is not None else None
+                    _settle_legacy_match(db,m["legacy_match_id"],legacy_winner["legacy_team_id"],legacy_loser["legacy_team_id"] if legacy_loser else None)
         db.execute("UPDATE cc_bracket_matches SET winner_team_id=?,score_a=?,score_b=?,result_type=?,referee=?,forfeit_team_id=?,disqualified_team_id=?,status=?,updated_at=? WHERE match_key=?",(winner,score_a,score_b,result_type,referee,forfeit_team,disqualified_team,new["status"],now(),key))
         db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(key,"result_set" if winner is not None else "result_cleared",actor,json.dumps(old,sort_keys=True),json.dumps(new,sort_keys=True),now()))
-        refresh(db); audit(db,"bracket_result_changed",{"match":key,"before":old,"after":new,"invalidated":done},actor)
-    return done
+        refresh(db); audit(db,"bracket_result_changed",{"match":key,"before":old,"after":new,"invalidated":invalid},actor)
+    return affected
 def bracket(db):
     out=[]
     for key,stage,label,*_ in DEFS:

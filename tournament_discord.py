@@ -838,21 +838,27 @@ def install(mod):
         for t in tc.teams(mod.db):
             a = mod.db.execute("SELECT discord_id FROM cc_discord_links WHERE username=? COLLATE NOCASE",(t["player1"],)).fetchone()
             b = mod.db.execute("SELECT discord_id FROM cc_discord_links WHERE username=? COLLATE NOCASE",(t["player2"],)).fetchone()
-            if not a or not b:
-                continue
-            a_id,b_id=a["discord_id"],b["discord_id"]
+            # Negative internal IDs let unlinked Minecraft players participate
+            # in the existing match engine without creating Discord wallets.
+            a_id=a["discord_id"] if a else -(t["id"]*2+1)
+            b_id=b["discord_id"] if b else -(t["id"]*2+2)
             old=mod.find_team(t["name"])
             if old:
+                legacy_id=old["id"]
                 if {old["p1"],old["p2"]}!={a_id,b_id}:
-                    has_matches=mod.q1("SELECT 1 FROM matches WHERE team_a=? OR team_b=? LIMIT 1",(old["id"],old["id"]))
-                    if has_matches or mod.team_of(a_id) or mod.team_of(b_id):
-                        log.warning("Legacy team name conflict for %s; not mirroring this Minecraft team",t["name"])
+                    occupied_a=mod.team_of(a_id) if a else None
+                    occupied_b=mod.team_of(b_id) if b else None
+                    conflict=any(x and x["id"]!=legacy_id for x in (occupied_a,occupied_b))
+                    owned=t.get("legacy_team_id")==legacy_id
+                    has_matches=mod.q1("SELECT 1 FROM matches WHERE team_a=? OR team_b=? LIMIT 1",(legacy_id,legacy_id))
+                    if conflict or (has_matches and not owned):
+                        log.warning("Legacy team identity conflict for %s; preserving the existing match history",t["name"])
                         continue
                     with mod.db:
-                        mod.db.execute("UPDATE teams SET p1=?,p2=? WHERE id=?",(a_id,b_id,old["id"]))
-                legacy_id=old["id"]
+                        mod.db.execute("UPDATE teams SET p1=?,p2=? WHERE id=?",(a_id,b_id,legacy_id))
             else:
-                if mod.team_of(a_id) or mod.team_of(b_id):
+                conflict=(mod.team_of(a_id) if a else None) or (mod.team_of(b_id) if b else None)
+                if conflict:
                     log.warning("A linked Discord account already belongs to another legacy team; skipping %s",t["name"])
                     continue
                 try:

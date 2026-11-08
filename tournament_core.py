@@ -316,9 +316,10 @@ def refresh(db):
     else:
         db.execute("INSERT INTO cc_tournament_settings(key,value) VALUES('champion_team_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(gf["winner_team_id"]),))
         has_players=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='players'").fetchone()
-        top=db.execute("""SELECT l.username,l.discord_id,p.balance FROM cc_discord_links l
-                          JOIN players p ON p.user_id=l.discord_id
-                          ORDER BY p.balance DESC,l.username COLLATE NOCASE LIMIT 1""").fetchone() if has_players else None
+        top=db.execute("""SELECT COALESCE(l.username,'Discord ' || CAST(p.user_id AS TEXT)) AS username,
+                          p.user_id AS discord_id,p.balance
+                          FROM players p LEFT JOIN cc_discord_links l ON l.discord_id=p.user_id
+                          ORDER BY p.balance DESC,username COLLATE NOCASE LIMIT 1""").fetchone() if has_players else None
         if top:
             previous=db.execute("SELECT status FROM cc_coin_rewards WHERE reward_key='highest_balance'").fetchone()
             if not previous or previous["status"]!="delivered":

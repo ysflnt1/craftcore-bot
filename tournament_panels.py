@@ -68,6 +68,9 @@ def panel_embed(mod,key,user_id=None):
         e.add_field(name="Winning duo",value="2x Nitro — one prize for each player on the champion team.",inline=False)
         e.add_field(name="Participant giveaway",value="1x Nitro Basic Wheel Spin. Every player must play all matches assigned to their team. Winning the tournament is not required.",inline=False)
         e.add_field(name="CraftCoin leaderboard",value="The participant with the highest CraftCoin balance at tournament end receives a special in-game reward when the new season starts.",inline=False)
+        coin_reward=mod.db.execute("SELECT * FROM cc_coin_rewards WHERE reward_key='highest_balance'").fetchone()
+        if coin_reward:
+            e.add_field(name="Highest-balance reward",value=f"{coin_reward['username']} · {coin_reward['balance_at_tournament_end']} CC · {coin_reward['status']}",inline=False)
         champion=mod.db.execute("SELECT value FROM cc_tournament_settings WHERE key='champion_team_id'").fetchone()
         if champion:
             winner_team=tc.team(mod.db,int(champion["value"]))

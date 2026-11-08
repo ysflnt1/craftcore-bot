@@ -590,38 +590,63 @@ def export_teams(db,fmt="json"):
 def export_bracket(db):
     values=[{k:m[k] for k in ("match_key","winner_team_id","score_a","score_b","result_type","referee","forfeit_team_id","disqualified_team_id")} for m in bracket(db)]
     return json.dumps({"version":1,"tournament":NAME,"teams":teams(db),"matches":values},ensure_ascii=False,indent=2)
-def import_bracket(db,raw,actor=None):
-    try: obj=json.loads(raw.decode("utf-8-sig") if isinstance(raw,bytes) else raw)
-    except Exception as e: raise ValueError("Invalid UTF-8 JSON backup.") from e
-    if not isinstance(obj,dict) or obj.get("version")!=1 or obj.get("tournament")!=NAME: raise ValueError("Unsupported backup version or tournament.")
-    local={t["id"]:t for t in teams(db)}; supplied=obj.get("teams")
-    if not isinstance(supplied,list) or len(supplied)!=len(local): raise ValueError("Backup roster does not match current teams.")
+def validate_bracket_backup(db,raw):
+    try:
+        obj=json.loads(raw.decode("utf-8-sig") if isinstance(raw,bytes) else raw)
+    except Exception as e:
+        raise ValueError("Invalid UTF-8 JSON backup.") from e
+    if not isinstance(obj,dict) or obj.get("version")!=1 or obj.get("tournament")!=NAME:
+        raise ValueError("Unsupported backup version or tournament.")
+    local={t["id"]:t for t in teams(db)}
+    supplied=obj.get("teams")
+    if not isinstance(supplied,list) or len(supplied)!=len(local):
+        raise ValueError("Backup roster does not match current teams.")
     for t in supplied:
         x=local.get(t.get("id"))
-        if not x or any(x[k]!=t.get(k) for k in ("name","player1","player2","bracket_slot")): raise ValueError("Backup contains invalid team IDs or identities.")
+        if not x or any(x[k]!=t.get(k) for k in ("name","player1","player2","bracket_slot")):
+            raise ValueError("Backup contains invalid team IDs or identities.")
     items=obj.get("matches")
-    if not isinstance(items,list) or len(items)!=15: raise ValueError("Backup must contain all 15 bracket matches.")
+    if not isinstance(items,list) or len(items)!=15:
+        raise ValueError("Backup must contain all 15 bracket matches.")
     mm={}
     for it in items:
-        if not isinstance(it,dict) or it.get("match_key") not in KEYS or it["match_key"] in mm: raise ValueError("Backup contains invalid or duplicate match IDs.")
+        if not isinstance(it,dict) or it.get("match_key") not in KEYS or it["match_key"] in mm:
+            raise ValueError("Backup contains invalid or duplicate match IDs.")
         mm[it["match_key"]]=it
-    if set(mm)!=KEYS: raise ValueError("Backup match IDs do not match the fixed bracket.")
-    team_ids={t["name"].casefold():t["id"] for t in local.values()}; winners={k:mm[k].get("winner_team_id") for k in KEYS}
+    if set(mm)!=KEYS:
+        raise ValueError("Backup match IDs do not match the fixed bracket.")
+    team_ids={t["name"].casefold():t["id"] for t in local.values()}
+    winners={k:mm[k].get("winner_team_id") for k in KEYS}
     for key,stage,label,a,b,sa,sb in DEFS:
-        ta=team_ids[a.casefold()] if a else winners[sa]; tb=team_ids[b.casefold()] if b else winners[sb]; it=mm[key]; win=it.get("winner_team_id"); x,y=it.get("score_a"),it.get("score_b"); typ=it.get("result_type")
-        if win is not None and (ta is None or tb is None or win not in (ta,tb)): raise ValueError(f"Invalid progression/winner in {key}.")
-        if (x is None)!=(y is None): raise ValueError(f"Incomplete scores in {key}.")
-        if x is not None and (not isinstance(x,int) or not isinstance(y,int) or min(x,y)<0 or x==y): raise ValueError(f"Invalid scores in {key}.")
-        if x is not None and typ=="normal" and win!=(ta if x>y else tb): raise ValueError(f"Winner and scores disagree in {key}.")
-        if win is not None and typ not in ("normal","forfeit","disqualification","override"): raise ValueError(f"Invalid result type in {key}.")
+        ta=team_ids[a.casefold()] if a else winners[sa]
+        tb=team_ids[b.casefold()] if b else winners[sb]
+        it=mm[key]; win=it.get("winner_team_id")
+        x,y=it.get("score_a"),it.get("score_b"); typ=it.get("result_type")
+        if win is not None and (ta is None or tb is None or win not in (ta,tb)):
+            raise ValueError(f"Invalid progression/winner in {key}.")
+        if (x is None)!=(y is None):
+            raise ValueError(f"Incomplete scores in {key}.")
+        if x is not None and (not isinstance(x,int) or not isinstance(y,int) or min(x,y)<0 or x==y):
+            raise ValueError(f"Invalid scores in {key}.")
+        if x is not None and typ=="normal" and win!=(ta if x>y else tb):
+            raise ValueError(f"Winner and scores disagree in {key}.")
+        if win is not None and typ not in ("normal","forfeit","disqualification","override"):
+            raise ValueError(f"Invalid result type in {key}.")
         ft=it.get("forfeit_team_id"); dt=it.get("disqualified_team_id")
-        if typ=="forfeit" and ft not in (ta,tb): raise ValueError(f"Invalid forfeiting team in {key}.")
-        if typ=="forfeit" and ft==win: raise ValueError(f"Forfeiting team cannot be the winner in {key}.")
-        if typ!="forfeit" and ft is not None: raise ValueError(f"Unexpected forfeit team in {key}.")
-        if typ=="disqualification" and dt not in (ta,tb): raise ValueError(f"Invalid disqualified team in {key}.")
-        if typ=="disqualification" and dt==win: raise ValueError(f"Disqualified team cannot be the winner in {key}.")
-        if typ!="disqualification" and dt is not None: raise ValueError(f"Unexpected disqualified team in {key}.")
-        if win is None and (x is not None or typ is not None or ft is not None or dt is not None): raise ValueError(f"Result data without winner in {key}.")
+        if typ=="forfeit" and ft not in (ta,tb):
+            raise ValueError(f"Invalid forfeiting team in {key}.")
+        if typ=="forfeit" and ft==win:
+            raise ValueError(f"Forfeiting team cannot be the winner in {key}.")
+        if typ!="forfeit" and ft is not None:
+            raise ValueError(f"Unexpected forfeit team in {key}.")
+        if typ=="disqualification" and dt not in (ta,tb):
+            raise ValueError(f"Invalid disqualified team in {key}.")
+        if typ=="disqualification" and dt==win:
+            raise ValueError(f"Disqualified team cannot be the winner in {key}.")
+        if typ!="disqualification" and dt is not None:
+            raise ValueError(f"Unexpected disqualified team in {key}.")
+        if win is None and (x is not None or typ is not None or ft is not None or dt is not None):
+            raise ValueError(f"Result data without winner in {key}.")
     changed=set()
     for key in KEYS:
         old=get_match(db,key); it=mm[key]
@@ -636,6 +661,10 @@ def import_bracket(db,raw,actor=None):
             raise ValueError(f"Cannot import backup while {key} has an open dispute.")
         if old["legacy_match_id"] and db.execute("SELECT 1 FROM bets WHERE match_id=? LIMIT 1",(old["legacy_match_id"],)).fetchone():
             raise ValueError(f"Cannot overwrite {key}: its legacy match has betting history. Resolve/correct that match through /match result first.")
+    return mm,changed
+
+def import_bracket(db,raw,actor=None):
+    mm,changed=validate_bracket_backup(db,raw)
     with db:
         for key in changed:
             old=get_match(db,key)

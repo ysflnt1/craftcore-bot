@@ -87,4 +87,4 @@ Render environment variables include DISCORD_TOKEN, GUILD_ID, STAFF_ROLE_IDS (co
 
 ## CI verification
 
-The GitHub Actions workflow compiles all Python files, imports the bot and validates the registered command groups/persistent panel view, then runs the tournament-core tests. The latest completed core/command workflow before the latest panel-metric-only updates passed 17 tests; check the latest run on the PR head before merging.
+The GitHub Actions workflow compiles all Python files, imports the bot and validates the registered command groups/persistent panel view, then runs the tournament-core tests. The latest workflow on PR head a0af239a77384706e5dcf8c2541b5e262093d6ec passed: Python compilation, bot command/persistent-view smoke test, and 17 tournament-core tests.

@@ -445,6 +445,13 @@ async def finish_match(mid, winner, forfeit_team=None):
         sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
         if sync_bracket:
             await sync_bracket()
+        publish = getattr(__import__("sys").modules[__name__], "publish_tournament_announcement", None)
+        if publish:
+            title = f"Match result · {tn(winner)} win"
+            body = f"{tn(winner)} won {match_data['round']}."
+            if forfeit_team:
+                body = f"{tn(forfeit_team)} forfeited; {tn(winner)} advanced."
+            await publish("match_result", title, body)
     except Exception:
         # The legacy match and wallet settlement are already committed. Log a
         # reconciliation problem so staff can recover from the persistent match.

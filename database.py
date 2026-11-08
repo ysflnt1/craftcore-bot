@@ -129,24 +129,26 @@ class PostgresConnection:
         if upper.startswith("SELECT CHANGES()"):
             return "__CRAFTCORE_CHANGES__", False, None
 
-        statement = re.sub(
-            r"(\b[\w.]+\b)\s*=\s*\?\s+COLLATE\s+NOCASE",
-            r"LOWER(\1)=LOWER(?)",
-            statement,
-            flags=re.I,
-        )
-        statement = re.sub(
-            r"(\b[\w.]+\b)\s+LIKE\s+\?\s+COLLATE\s+NOCASE",
-            r"LOWER(\1) LIKE LOWER(?)",
-            statement,
-            flags=re.I,
-        )
-        statement = re.sub(
-            r"(\b[\w.]+\b)\s+COLLATE\s+NOCASE",
-            r"LOWER(\1)",
-            statement,
-            flags=re.I,
-        )
+        is_table_ddl = upper.startswith("CREATE TABLE") or upper.startswith("ALTER TABLE")
+        if not is_table_ddl:
+            statement = re.sub(
+                r"(\b[\w.]+\b)\s*=\s*\?\s+COLLATE\s+NOCASE",
+                r"LOWER(\1)=LOWER(?)",
+                statement,
+                flags=re.I,
+            )
+            statement = re.sub(
+                r"(\b[\w.]+\b)\s+LIKE\s+\?\s+COLLATE\s+NOCASE",
+                r"LOWER(\1) LIKE LOWER(?)",
+                statement,
+                flags=re.I,
+            )
+            statement = re.sub(
+                r"(\b[\w.]+\b)\s+COLLATE\s+NOCASE",
+                r"LOWER(\1)",
+                statement,
+                flags=re.I,
+            )
         statement = re.sub(
             r"datetime\(\s*'now'\s*\)",
             "TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')",

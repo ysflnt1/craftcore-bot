@@ -278,8 +278,8 @@ def set_result(db,key,winner,score_a=None,score_b=None,result_type="normal",refe
             if cm["winner_team_id"] is not None or n:
                 db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(child,"downstream_invalidated",actor,json.dumps(snapshot(cm),sort_keys=True),json.dumps({"upstream":key,"draft_steps_removed":n}),now()))
             if n: db.execute("DELETE FROM cc_draft_selections WHERE match_key=?",(child,))
-            if child in done: db.execute("UPDATE cc_bracket_matches SET winner_team_id=NULL,score_a=NULL,score_b=NULL,result_type=NULL,referee=NULL,status='waiting',updated_at=? WHERE match_key=?",(now(),child))
-        db.execute("UPDATE cc_bracket_matches SET winner_team_id=?,score_a=?,score_b=?,result_type=?,referee=?,status=?,updated_at=? WHERE match_key=?",(winner,score_a,score_b,result_type,referee,new["status"],now(),key))
+            if child in done: db.execute("UPDATE cc_bracket_matches SET winner_team_id=NULL,score_a=NULL,score_b=NULL,result_type=NULL,referee=NULL,forfeit_team_id=NULL,disqualified_team_id=NULL,status='waiting',updated_at=? WHERE match_key=?",(now(),child))
+        db.execute("UPDATE cc_bracket_matches SET winner_team_id=?,score_a=?,score_b=?,result_type=?,referee=?,forfeit_team_id=?,disqualified_team_id=?,status=?,updated_at=? WHERE match_key=?",(winner,score_a,score_b,result_type,referee,forfeit_team,disqualified_team,new["status"],now(),key))
         db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(key,"result_set" if winner is not None else "result_cleared",actor,json.dumps(old,sort_keys=True),json.dumps(new,sort_keys=True),now()))
         refresh(db); audit(db,"bracket_result_changed",{"match":key,"before":old,"after":new,"invalidated":done},actor)
     return done
@@ -297,7 +297,7 @@ def reset_bracket(db,actor=None):
             m=get_match(db,key)
             if m["winner_team_id"] is not None: db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(key,"bracket_reset",actor,json.dumps(snapshot(m),sort_keys=True),"{}",now()))
         db.execute("DELETE FROM cc_draft_selections")
-        db.execute("UPDATE cc_bracket_matches SET winner_team_id=NULL,score_a=NULL,score_b=NULL,result_type=NULL,referee=NULL,status='waiting',updated_at=?",(now(),))
+        db.execute("UPDATE cc_bracket_matches SET winner_team_id=NULL,score_a=NULL,score_b=NULL,result_type=NULL,referee=NULL,forfeit_team_id=NULL,disqualified_team_id=NULL,status='waiting',updated_at=?",(now(),))
         refresh(db); audit(db,"bracket_reset",{"teams_and_legacy_economy_preserved":True},actor)
 def history(db,key,limit=20):
     if key not in KEYS: raise ValueError("Unknown match ID.")

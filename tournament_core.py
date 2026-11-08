@@ -116,6 +116,16 @@ def ensure_schema(db):
         delivery_confirmed_by INTEGER,
         delivery_confirmed_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS cc_announcements(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        channel_id INTEGER,
+        message_id INTEGER,
+        actor_id INTEGER,
+        created_at TEXT NOT NULL
+    );
     """)
     # Safe additive migrations for columns added after the initial deployment.
     migrations = {

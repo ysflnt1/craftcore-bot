@@ -136,6 +136,17 @@ def ensure_schema(db):
         delivery_confirmed_by INTEGER,
         delivery_confirmed_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS cc_coin_rewards(
+        reward_key TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        discord_id INTEGER NOT NULL,
+        balance_at_tournament_end INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending','delivered','void')),
+        recorded_at TEXT NOT NULL,
+        confirmed_by INTEGER,
+        confirmed_at TEXT
+    );
     """)
     # Safe additive migrations for columns added after the initial deployment.
     migrations = {
@@ -299,8 +310,22 @@ def refresh(db):
         status="completed" if m["winner_team_id"] is not None else ("ready" if ta is not None and tb is not None else "waiting")
         db.execute("UPDATE cc_bracket_matches SET team_a_id=?,team_b_id=?,status=?,updated_at=? WHERE match_key=?",(ta,tb,status,now(),key))
     gf=get_match(db,"GF")
-    if gf["winner_team_id"] is None: db.execute("DELETE FROM cc_tournament_settings WHERE key='champion_team_id'")
-    else: db.execute("INSERT INTO cc_tournament_settings(key,value) VALUES('champion_team_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(gf["winner_team_id"]),))
+    if gf["winner_team_id"] is None:
+        db.execute("DELETE FROM cc_tournament_settings WHERE key='champion_team_id'")
+        db.execute("UPDATE cc_coin_rewards SET status='void' WHERE reward_key='highest_balance' AND status='pending'")
+    else:
+        db.execute("INSERT INTO cc_tournament_settings(key,value) VALUES('champion_team_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(gf["winner_team_id"]),))
+        top=db.execute("""SELECT l.username,l.discord_id,p.balance FROM cc_discord_links l
+                          JOIN players p ON p.user_id=l.discord_id
+                          ORDER BY p.balance DESC,l.username COLLATE NOCASE LIMIT 1""").fetchone()
+        if top:
+            previous=db.execute("SELECT status FROM cc_coin_rewards WHERE reward_key='highest_balance'").fetchone()
+            if not previous or previous["status"]!="delivered":
+                db.execute("""INSERT INTO cc_coin_rewards(reward_key,username,discord_id,balance_at_tournament_end,status,recorded_at)
+                              VALUES('highest_balance',?,?,?,'pending',?)
+                              ON CONFLICT(reward_key) DO UPDATE SET username=excluded.username,discord_id=excluded.discord_id,
+                              balance_at_tournament_end=excluded.balance_at_tournament_end,status='pending',recorded_at=excluded.recorded_at""",
+                           (top["username"],top["discord_id"],top["balance"],now()))
 def _coin_ledger(db,user_id,delta,reason,match_id=None):
     row=db.execute("SELECT balance FROM players WHERE user_id=?",(user_id,)).fetchone()
     if not row:

@@ -17,13 +17,14 @@ This branch extends the existing Discord bot for one Minecraft PvP 2v2 tournamen
 
 ### Gameplay and betting bridge
 - Every Minecraft team can be mirrored into the existing match/game tables using internal placeholder IDs for players who have not linked Discord.
-- Discord linking is optional for playing; it is required only for CraftCoin wallet and betting features.
+- Minecraft/Discord linking is optional for playing and betting. It is used for participant-only tournament features such as Minecraft player profiles, participant giveaway eligibility and champion prize claims.
 - Once both bracket teams are known, the existing match engine receives a legacy match record. Existing /match game and /match forfeit gameplay updates the Minecraft bracket automatically.
 - Staff can also record a bracket result directly with /match result or /bracket result.
-- The existing bet modal/panel now accepts new wagers only for fixed-bracket matches and only from Discord accounts linked to registered Minecraft participants.
+- The existing bet modal/panel accepts wagers from any member of the Discord server, including people who are not on the Minecraft roster. New matches are still restricted to the fixed tournament bracket.
 - Betting closes when the match locks/starts or is disputed.
 - Correct predictions return 1.5x the original stake in total (stake included). Wager debits, payouts, refunds, staff adjustments and result corrections are logged.
-- Match completion and bet settlement are performed in one SQLite write transaction. Downstream wager refunds and winner corrections are guarded against negative wallet balances.
+- Any Discord member receives a 100-CraftCoin wallet automatically on their first wager or wallet interaction. Wallets, balances, wagers and history are keyed by Discord user ID.
+- Match completion and bet settlement are performed in one database transaction, with PostgreSQL row locks preventing a wager from racing a match settlement. Downstream wager refunds and winner corrections are guarded against negative wallet balances.
 - Wallet freeze/unfreeze and transaction history are available to staff/participants.
 
 ### Draft and match administration
@@ -46,7 +47,7 @@ This branch extends the existing Discord bot for one Minecraft PvP 2v2 tournamen
 - Staff can view eligibility, draw one Nitro Basic Wheel Spin winner, and review the result.
 - The participant must claim the prize; staff separately confirms delivery. The bot never marks it delivered automatically.
 - Each champion player can claim their share of the 2x Nitro champion prize; staff confirms delivery individually.
-- At Grand Final completion, the highest linked participant CraftCoin balance is snapshotted for the new-season in-game reward. Staff confirms delivery after the new season starts.
+- At Grand Final completion, the highest CraftCoin balance across all bettor wallets (not only linked roster players) is snapshotted for the new-season in-game reward. Staff confirms delivery after the new season starts.
 
 ## Main commands
 
@@ -64,27 +65,40 @@ Legacy Discord-member team commands and old giveaway commands are retained with 
 
 ## Data safety and migrations
 
-The migration creates additive cc_* tables and adds nullable columns to the new tournament tables. It does not drop, rename or convert the legacy players, teams, matches, games, draft or bets tables. Existing CraftCoin balances and bet rows remain in their original tables. New transaction ledger entries start from this deployment; historical wallet movements cannot be reconstructed.
+The migration creates additive cc_* tables and adds nullable columns to the new tournament tables. It does not drop, rename or convert the legacy players, teams, matches, games, draft or bets tables. Existing CraftCoin balances and bet rows remain in the original `players` and `bets` tables. On first PostgreSQL startup, the bot attempts a one-time import of `config`, `players`, `teams`, `matches`, `draft`, `games` and `bets` from `DB_PATH` if that SQLite file is still present. It does not delete the source file. If Render's ephemeral filesystem has already discarded the file before this migration runs, those old rows cannot be recovered by the bot. New transaction ledger entries start from this deployment; historical wallet movements cannot be reconstructed.
 
 A conflicting initial roster stops seeding rather than overwriting team/player data. Roster identities are editable only before bracket initialisation. After launch, changes to results use audited correction and wager reconciliation paths.
 
-## Render persistence requirement
+## Render PostgreSQL storage
 
-The current Render service is a Free web service and SQLite currently uses the relative craftcore.db path. Render Free filesystems are ephemeral, so this does not satisfy durable tournament storage. To retain SQLite, attach a paid persistent disk mounted at /var/data and set DB_PATH=/var/data/craftcore.db. Alternatively, a managed PostgreSQL migration can be implemented separately. This branch does not change the Render plan or create a billable service.
+The Render Blueprint now provisions a free Render Postgres database named `craftcore-db` and injects its internal connection string as `DATABASE_URL`. The bot uses a PostgreSQL compatibility layer in production, while local development without `DATABASE_URL` continues to use SQLite. The service has `REQUIRE_DATABASE_URL=true`, so it will fail clearly rather than silently fall back to an ephemeral SQLite file if the Render database connection is missing.
 
-Do not set DB_PATH to /var/data/craftcore.db until the disk is attached. The existing web.py health endpoint remains as the Render service health check; no new user-facing website has been added.
+The selected Render Postgres Free plan is intentionally temporary:
+- 1 GB storage.
+- It expires 30 days after creation.
+- When it expires, it becomes inaccessible unless upgraded. Render gives a further 14 days to upgrade before deleting it and its data.
+- Free Postgres does not provide database backups, and only one Free Postgres database can be active per workspace.
 
-Render environment variables include DISCORD_TOKEN, GUILD_ID, STAFF_ROLE_IDS (comma-separated), STARTING_COINS (defaults to 100), WIN_MULTIPLIER (defaults to 1.5), and DB_PATH.
+The user has accepted this 30-day lifetime. This is therefore a temporary tournament database, not permanent storage. When it expires, the bot will stop connecting until a new/paid database is configured; a newly-created free database will not contain the previous data unless it was exported and restored separately. Do not assume that Render's 14-day upgrade window means the expired database stays online during that period.
 
+When syncing the Blueprint, Render must be able to create `craftcore-db`. If the workspace already has its one Free Postgres instance, reuse that database by setting `DATABASE_URL` to its connection string instead of creating a second Free database. The web service and database should be in the same Render region so the internal connection string is reachable.
+
+Environment:
+- `DATABASE_URL`: supplied by the Render Blueprint from the database's internal connection string.
+- `REQUIRE_DATABASE_URL=true`: prevents an accidental SQLite fallback on Render.
+- `DB_PATH=craftcore.db`: local SQLite path and best-effort source path for the one-time legacy import; it is not the production Render datastore.
+- Existing variables remain: `DISCORD_TOKEN`, `GUILD_ID`, `STAFF_ROLE_IDS`, `STARTING_COINS` (100 by default), and `WIN_MULTIPLIER` (1.5 by default).
+
+The existing `web.py` health endpoint remains the Render service health check; no new user-facing website has been added.
 ## Deliberate constraints and remaining operational work
 
 - Team create/edit/delete/import are pre-launch operations. Once the bracket is initialised, the 16 team identities are locked to protect match/bet history.
 - Draft control is currently staff-only; designated captain permissions are not separately configured.
 - Prize delivery is a staff-recorded confirmation; the bot does not deliver Nitro or in-game items itself.
 - New coin-ledger history begins at deployment; old balance changes remain only in the pre-existing database/bets history.
-- Durable Render storage must be configured before production deployment. Free Render SQLite is not safe for this tournament.
+- The configured Render Free Postgres database is temporary and expires after 30 days. Plan for a reset or upgrade before that date; Free Postgres has no managed backup.
 - End-to-end Discord testing still needs to be performed in a private test guild with real role/channel permissions, participant links and match panels.
 
 ## CI verification
 
-The GitHub Actions workflow compiles all Python files, imports the bot and validates the registered command groups/persistent panel view, then runs the tournament-core tests. The latest workflow on PR head a0af239a77384706e5dcf8c2541b5e262093d6ec passed: Python compilation, bot command/persistent-view smoke test, and 17 tournament-core tests.
+GitHub Actions compiles the Python files, imports the bot and checks the command groups/persistent panel view, then runs the SQLite core tests and PostgreSQL integration tests (against a temporary PostgreSQL 16 service).

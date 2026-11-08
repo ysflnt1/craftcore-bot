@@ -579,11 +579,8 @@ class BetButton(
             return await interaction.response.send_message(
                 "Predictions for this match are closed.", ephemeral=True
             )
-        p = get_player(interaction.user.id)
-        if not p:
-            return await interaction.response.send_message(
-                "Only registered participants can place wagers.", ephemeral=True
-            )
+        # Wallets are provisioned by the public betting extension when a
+        # wager is submitted; Minecraft roster linking is not required.
         await interaction.response.send_modal(BetModal(self.match_id, self.side))
 
 

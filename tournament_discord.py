@@ -88,6 +88,10 @@ class DraftSelect(discord.ui.Select):
         try:s=tc.draft_add(self.mod.db,self.key,self.values[0],interaction.user.id)
         except (ValueError,sqlite3.Error) as ex:
             return await interaction.response.send_message(str(ex),ephemeral=True)
+        await self.mod.sync_tournament_bracket()
+        linked=tc.get_match(self.mod.db,self.key)
+        if linked.get("legacy_match_id"):
+            await self.mod.refresh_pred_message(linked["legacy_match_id"])
         await interaction.response.edit_message(embed=draft_embed(self.mod.db,self.key),view=DraftView(self.mod,self.key) if not s["complete"] else None)
 
 class DraftView(discord.ui.View):
@@ -328,6 +332,10 @@ def install(mod):
     async def draft_undo(interaction,match_key:app_commands.Choice[str]):
         try:step=tc.draft_undo(mod.db,match_key.value,interaction.user.id)
         except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
+        await mod.sync_tournament_bracket()
+        linked=tc.get_match(mod.db,match_key.value)
+        if linked.get("legacy_match_id"):
+            await mod.refresh_pred_message(linked["legacy_match_id"])
         await interaction.response.send_message(f"✅ Removed draft step {step}. Use /draft view to reopen the dropdown.",ephemeral=True)
 
     # Link Discord-specific wallets to a Minecraft participant explicitly.
@@ -397,6 +405,26 @@ def install(mod):
             except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
             await interaction.response.send_message(f"Unfroze {member.mention}'s wallet.",ephemeral=True)
 
+
+    @dg.command(name="override",description="Staff: replace a draft step with a different gamemode")
+    @app_commands.choices(match_key=MATCHES,gamemode=[app_commands.Choice(name=x,value=x) for x in tc.MODES])
+    @mod.staff_only
+    async def draft_override_cmd(interaction,match_key:app_commands.Choice[str],step:app_commands.Range[int,1,9],gamemode:app_commands.Choice[str]):
+        try:state=tc.draft_override(mod.db,match_key.value,step,gamemode.value,interaction.user.id)
+        except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
+        await mod.sync_tournament_bracket()
+        linked=tc.get_match(mod.db,match_key.value)
+        if linked.get("legacy_match_id"):await mod.refresh_pred_message(linked["legacy_match_id"])
+        await interaction.response.send_message(embed=draft_embed(mod.db,match_key.value),ephemeral=True)
+
+    @dg.command(name="history",description="Staff: view draft selection and override history")
+    @app_commands.choices(match_key=MATCHES)
+    @mod.staff_only
+    async def draft_history_cmd(interaction,match_key:app_commands.Choice[str]):
+        rows=tc.draft_history(mod.db,match_key.value)
+        if not rows:return await interaction.response.send_message("No draft changes recorded yet.",ephemeral=True)
+        lines=[f"{r['created_at']} · {r['action']} · {r['details_parsed'].get('gamemode',r['details_parsed'].get('previous',''))}" for r in rows]
+        await interaction.response.send_message(f"Draft history · {match_key.value}\n"+"\n".join(lines)[:1800],ephemeral=True)
 
     # The existing /match group remains the live match and betting interface.
     mg=bot.tree.get_command("match")

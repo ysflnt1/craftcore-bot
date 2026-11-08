@@ -249,7 +249,8 @@ def install(mod):
     async def tournament_initialise(interaction):
         try:a=tc.seed_initial_teams(mod.db,interaction.user.id);b=tc.initialise_bracket(mod.db,interaction.user.id)
         except ValueError as ex:return await interaction.response.send_message(f"Stopped safely: {ex}",ephemeral=True)
-        await interaction.response.send_message(f"✅ Added {a} initial teams. Bracket {'created' if b else 'already exists'} (15 matches).",ephemeral=True)
+        created=await mod.sync_tournament_bracket()
+        await interaction.response.send_message(f"✅ Added {a} initial teams. Bracket {'created' if b else 'already exists'} (15 matches). New linked betting matches: {created}.",ephemeral=True)
     @tg.command(name="lock_registrations",description="Staff: lock team registrations and edits")
     @mod.staff_only
     async def lock_reg(interaction):
@@ -795,8 +796,12 @@ def install(mod):
             old=mod.find_team(t["name"])
             if old:
                 if {old["p1"],old["p2"]}!={a_id,b_id}:
-                    log.warning("Legacy team name conflict for %s; not mirroring this Minecraft team",t["name"])
-                    continue
+                    has_matches=mod.q1("SELECT 1 FROM matches WHERE team_a=? OR team_b=? LIMIT 1",(old["id"],old["id"]))
+                    if has_matches or mod.team_of(a_id) or mod.team_of(b_id):
+                        log.warning("Legacy team name conflict for %s; not mirroring this Minecraft team",t["name"])
+                        continue
+                    with mod.db:
+                        mod.db.execute("UPDATE teams SET p1=?,p2=? WHERE id=?",(a_id,b_id,old["id"]))
                 legacy_id=old["id"]
             else:
                 if mod.team_of(a_id) or mod.team_of(b_id):

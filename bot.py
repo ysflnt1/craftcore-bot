@@ -1064,6 +1064,10 @@ async def on_ready():
     log.info("Logged in as %s (%s)", bot.user, bot.user.id)
 
 
+import public_betting
+public_betting.install(__import__("sys").modules["__main__"])
+
+
 if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("Set DISCORD_TOKEN in your .env file.")

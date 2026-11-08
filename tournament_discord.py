@@ -398,6 +398,110 @@ def install(mod):
             await interaction.response.send_message(f"Unfroze {member.mention}'s wallet.",ephemeral=True)
 
 
+    # The existing /match group remains the live match and betting interface.
+    mg=bot.tree.get_command("match")
+    if isinstance(mg,app_commands.Group):
+        @mg.command(name="result",description="Staff: record a tournament bracket match winner and settle its wagers")
+        @app_commands.choices(match_key=MATCHES,result_type=RESULT_TYPES)
+        @app_commands.autocomplete(winner=bind_autocomplete(winner_ac,mod))
+        @mod.staff_only
+        async def match_result(interaction,match_key:app_commands.Choice[str],winner:str,
+                               result_type:app_commands.Choice[str],score_a:Optional[int]=None,
+                               score_b:Optional[int]=None,referee:Optional[str]=None):
+            try:
+                tid=int(winner)
+                cleared=tc.set_result(mod.db,match_key.value,tid,score_a,score_b,result_type.value,referee,interaction.user.id)
+                await mod.sync_tournament_bracket()
+            except tc.DownstreamResultsExist as ex:
+                detail=", ".join(ex.match_keys)
+                return await interaction.response.send_message(
+                    f"Changing this winner resets downstream match/draft state and refunds dependent wagers: {detail}. Confirm?",
+                    view=ResultConfirm(mod,interaction.user.id,match_key.value,tid,score_a,score_b,result_type.value,referee),
+                    ephemeral=True,
+                )
+            except (ValueError,TypeError) as ex:
+                return await interaction.response.send_message(str(ex),ephemeral=True)
+            updated=tc.get_match(mod.db,match_key.value)
+            if updated and updated.get("legacy_match_id"):
+                await mod.refresh_pred_message(updated["legacy_match_id"])
+                if updated["status"]=="completed":
+                    await mod.post_result(updated["legacy_match_id"])
+            await interaction.response.send_message(
+                f"✅ Result saved for **{match_key.value}**. Winner: **{team_name(mod.db,tid)}**. "
+                f"Downstream matches reset: {', '.join(cleared) if cleared else 'none'}.",
+                ephemeral=True,
+            )
+
+        @mg.command(name="history",description="View the result and dispute history for a tournament match")
+        @app_commands.choices(match_key=MATCHES)
+        async def match_history(interaction,match_key:app_commands.Choice[str]):
+            rows=tc.history(mod.db,match_key.value)
+            disputes=tc.dispute_history(mod.db,match_key.value)
+            lines=[f"{r['created_at']} · {r['action']} · staff {r['actor_id'] or 'system'}" for r in rows]
+            lines.extend(f"{d['created_at']} · dispute {d['status']} · {d['reason']}" for d in disputes)
+            await interaction.response.send_message(
+                f"**{match_key.value} history**\n"+("\n".join(lines)[:1800] or "No changes recorded."),
+                ephemeral=True,
+            )
+
+        @mg.command(name="dispute",description="Raise a dispute before a bracket match is settled")
+        @app_commands.choices(match_key=MATCHES)
+        async def match_dispute(interaction,match_key:app_commands.Choice[str],reason:str):
+            m=tc.get_match(mod.db,match_key.value)
+            if not m:
+                return await interaction.response.send_message("Unknown match.",ephemeral=True)
+            if not staff(mod,interaction):
+                link=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(interaction.user.id,)).fetchone()
+                player_team=mod.db.execute("SELECT team_id FROM cc_tournament_players WHERE username=? COLLATE NOCASE",(link["username"],)).fetchone() if link else None
+                if not player_team or player_team["team_id"] not in (m["team_a_id"],m["team_b_id"]):
+                    return await interaction.response.send_message("Only a participant in this match or tournament staff can raise a dispute.",ephemeral=True)
+            legacy=mod.get_match(m["legacy_match_id"]) if m.get("legacy_match_id") else None
+            previous=legacy["status"] if legacy else None
+            try:
+                dispute_id=tc.open_dispute(mod.db,match_key.value,interaction.user.id,reason,previous)
+            except ValueError as ex:
+                return await interaction.response.send_message(str(ex),ephemeral=True)
+            if legacy and legacy["status"]=="open":
+                with mod.db:
+                    mod.db.execute("UPDATE matches SET status='locked' WHERE id=?",(legacy["id"],))
+                await mod.refresh_pred_message(legacy["id"])
+            await interaction.response.send_message(
+                f"⚠️ Dispute #{dispute_id} opened for **{match_key.value}**. Betting and game scoring are paused until staff resolve it.",
+                ephemeral=True,
+            )
+
+        @mg.command(name="resolve_dispute",description="Staff: resolve a bracket match dispute")
+        @app_commands.choices(match_key=MATCHES,decision=[
+            app_commands.Choice(name="Resume the match",value="resume"),
+            app_commands.Choice(name="Keep the match locked",value="uphold"),
+        ])
+        @mod.staff_only
+        async def match_resolve_dispute(interaction,match_key:app_commands.Choice[str],
+                                        decision:app_commands.Choice[str],notes:str):
+            try:
+                record=tc.resolve_dispute(mod.db,match_key.value,interaction.user.id,notes)
+            except ValueError as ex:
+                return await interaction.response.send_message(str(ex),ephemeral=True)
+            m=tc.get_match(mod.db,match_key.value)
+            if m and m.get("legacy_match_id"):
+                legacy=mod.get_match(m["legacy_match_id"])
+                if legacy and legacy["status"]=="locked" and record["previous_legacy_status"]=="open" and decision.value=="resume":
+                    with mod.db:
+                        mod.db.execute("UPDATE matches SET status='open' WHERE id=?",(legacy["id"],))
+                    await mod.refresh_pred_message(legacy["id"])
+            await interaction.response.send_message(
+                f"✅ Dispute for **{match_key.value}** resolved ({decision.value}). {notes}",
+                ephemeral=True,
+            )
+
+        @mg.command(name="referee",description="Staff: assign or update a match referee")
+        @app_commands.choices(match_key=MATCHES)
+        @mod.staff_only
+        async def match_referee(interaction,match_key:app_commands.Choice[str],referee:str):
+            try:tc.assign_referee(mod.db,match_key.value,referee,interaction.user.id)
+            except ValueError as ex:return await interaction.response.send_message(str(ex),ephemeral=True)
+            await interaction.response.send_message(f"✅ Referee assigned to **{match_key.value}**: {referee}",ephemeral=True)
+
     async def sync_legacy_bracket():
         """Mirror linked Minecraft duos into the legacy betting/game tables."""
         linked = {}

@@ -102,3 +102,5 @@ The existing `web.py` health endpoint remains the Render service health check; n
 ## CI verification
 
 GitHub Actions compiles the Python files, imports the bot and checks the command groups/persistent panel view, then runs the SQLite core tests and PostgreSQL integration tests (against a temporary PostgreSQL 16 service).
+
+Latest checked workflow result before this documentation update: **22 passed**, including real PostgreSQL 16 integration tests, SQLite tournament-core tests, Python compilation, bot import and command/persistent-panel smoke tests.

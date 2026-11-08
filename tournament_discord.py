@@ -426,6 +426,188 @@ def install(mod):
         lines=[f"{r['created_at']} · {r['action']} · {r['details_parsed'].get('gamemode',r['details_parsed'].get('previous',''))}" for r in rows]
         await interaction.response.send_message(f"Draft history · {match_key.value}\n"+"\n".join(lines)[:1800],ephemeral=True)
 
+    # Minecraft-identity statistics and placement views.
+    @group.command(name="stats",description="View tournament statistics for a team")
+    @app_commands.autocomplete(team_id=bind_autocomplete(team_ac,mod))
+    async def team_stats_cmd(interaction,team_id:str):
+        rows=tc.team_stats(mod.db)
+        item=next((x for x in rows if x["id"]==int(team_id)),None)
+        if not item:return await interaction.response.send_message("Team not found.",ephemeral=True)
+        e=discord.Embed(title=f"Team statistics · {item['name']}",colour=discord.Colour.blurple())
+        e.description=f"{item['player1']} + {item['player2']}"
+        e.add_field(name="Matches",value=str(item["matches_played"]),inline=True)
+        e.add_field(name="Wins / Losses",value=f"{item['wins']} / {item['losses']}",inline=True)
+        e.add_field(name="Win rate",value=f"{item['win_percent']}%",inline=True)
+        e.add_field(name="Placement",value=str(item["placement"] or "In progress"),inline=True)
+        await interaction.response.send_message(embed=e,ephemeral=True)
+
+    @group.command(name="leaderboard",description="Tournament team leaderboard")
+    async def team_leaderboard_cmd(interaction):
+        rows=tc.team_stats(mod.db)
+        lines=[f"**{i}. {x['name']}** · {x['wins']}W/{x['losses']}L · {x['win_percent']}% · {('Place '+str(x['placement'])) if x['placement'] else 'In progress'}" for i,x in enumerate(rows[:16],1)]
+        await interaction.response.send_message("**Tournament team leaderboard**\n"+"\n".join(lines)[:1800],ephemeral=True)
+
+    player_group=app_commands.Group(name="player",description="Minecraft username player profiles",guild_only=True)
+    bot.tree.add_command(player_group)
+    @player_group.command(name="stats",description="View statistics for a Minecraft username")
+    @app_commands.autocomplete(username=bind_autocomplete(player_ac,mod))
+    async def player_stats_cmd(interaction,username:str):
+        row=next((x for x in tc.player_stats(mod.db) if x["username"].casefold()==username.casefold()),None)
+        if not row:return await interaction.response.send_message("Minecraft player not found.",ephemeral=True)
+        e=discord.Embed(title=f"Player profile · {row['username']}",colour=discord.Colour.blurple())
+        e.description=f"Team: **{row['team_name']}**"
+        e.add_field(name="Matches",value=str(row["matches_played"]),inline=True)
+        e.add_field(name="Wins / Losses",value=f"{row['wins']} / {row['losses']}",inline=True)
+        e.add_field(name="Win rate",value=f"{row['win_percent']}%",inline=True)
+        e.add_field(name="Placement",value=str(row["placement"] or "In progress"),inline=True)
+        await interaction.response.send_message(embed=e,ephemeral=True)
+    @player_group.command(name="leaderboard",description="Tournament player leaderboard")
+    async def player_leaderboard_cmd(interaction):
+        rows=tc.player_stats(mod.db)
+        rows.sort(key=lambda x:(x["placement"] is None,x["placement"] or 99,-x["wins"],x["username"].casefold()))
+        lines=[f"**{i}. {x['username']}** · {x['team_name']} · {x['wins']}W/{x['losses']}L · {x['win_percent']}%" for i,x in enumerate(rows[:15],1)]
+        await interaction.response.send_message("**Minecraft player leaderboard**\n"+"\n".join(lines)[:1800],ephemeral=True)
+
+    # Wallet views and prediction metrics are scoped to the 32 linked tournament players.
+    if isinstance(cg,app_commands.Group):
+        @cg.command(name="balance",description="View your linked tournament CraftCoin wallet")
+        async def coins_balance(interaction,member:Optional[discord.Member]=None):
+            target=member or interaction.user
+            if target.id!=interaction.user.id and not staff(mod,interaction):
+                return await interaction.response.send_message("Only staff can view another participant's wallet.",ephemeral=True)
+            link=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(target.id,)).fetchone()
+            wallet=mod.get_player(target.id)
+            if not link or not wallet:return await interaction.response.send_message("That account is not linked to a tournament participant wallet.",ephemeral=True)
+            pending=mod.pending_total(target.id)
+            await interaction.response.send_message(
+                f"**{link['username']}** · **{wallet['balance']}** CraftCoins"
+                +(f" · {pending} currently wagered" if pending else ""),
+                ephemeral=True,
+            )
+
+        @cg.command(name="leaderboard",description="View participant balances, profit and prediction accuracy")
+        async def coins_leaderboard(interaction):
+            rows=mod.db.execute("""SELECT p.user_id,p.balance,l.username FROM players p
+                                   JOIN cc_discord_links l ON l.discord_id=p.user_id""").fetchall()
+            metrics=[]
+            for r in rows:
+                bets=mod.db.execute("""SELECT b.amount,b.payout,m.status FROM bets b JOIN matches m ON m.id=b.match_id
+                                        WHERE b.user_id=? AND b.settled=1""",(r["user_id"],)).fetchall()
+                completed=[b for b in bets if b["status"]=="done"]
+                wins=sum(1 for b in completed if b["payout"]>b["amount"])
+                profit=sum(b["payout"]-b["amount"] for b in completed)
+                metrics.append({"username":r["username"],"balance":r["balance"],"profit":profit,
+                                "accuracy":round(100*wins/len(completed),1) if completed else 0.0,"bets":len(completed)})
+            by_balance=sorted(metrics,key=lambda x:(-x["balance"],x["username"].casefold()))
+            by_profit=sorted(metrics,key=lambda x:(-x["profit"],x["username"].casefold()))
+            by_accuracy=sorted((x for x in metrics if x["bets"]),key=lambda x:(-x["accuracy"],-x["bets"],x["username"].casefold()))
+            e=discord.Embed(title="CRAFTCOIN · PARTICIPANT LEADERBOARDS",colour=discord.Colour.gold())
+            e.add_field(name="Highest balances",value="\n".join(f"{i}. {x['username']} · {x['balance']}" for i,x in enumerate(by_balance[:10],1)) or "No linked wallets",inline=False)
+            e.add_field(name="Biggest net profit",value="\n".join(f"{i}. {x['username']} · {x['profit']:+}" for i,x in enumerate(by_profit[:5],1)) or "No settled bets",inline=True)
+            e.add_field(name="Best prediction accuracy",value="\n".join(f"{i}. {x['username']} · {x['accuracy']}% ({x['bets']} bets)" for i,x in enumerate(by_accuracy[:5],1)) or "No settled bets",inline=True)
+            await interaction.response.send_message(embed=e,ephemeral=True)
+
+        @cg.command(name="remove",description="Staff: remove CraftCoins from a participant wallet")
+        @mod.staff_only
+        async def coins_remove(interaction,member:discord.Member,amount:app_commands.Range[int,1,1000000]):
+            await mod._adjust(interaction,member,amount,"take")
+
+    # One participant giveaway. Eligibility is calculated from each Minecraft
+    # player's team's assigned bracket matches, not from Discord team membership.
+    gg=bot.tree.get_command("giveaway")
+    if isinstance(gg,app_commands.Group):
+        @gg.command(name="eligibility",description="Check a Minecraft player's participant giveaway eligibility")
+        @app_commands.autocomplete(username=bind_autocomplete(player_ac,mod))
+        async def giveaway_eligibility_cmd(interaction,username:Optional[str]=None):
+            if username is None:
+                link=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(interaction.user.id,)).fetchone()
+                if not link:return await interaction.response.send_message("Link your Discord account to your Minecraft username first, or ask staff to check it.",ephemeral=True)
+                username=link["username"]
+            elif not staff(mod,interaction):
+                link=mod.db.execute("SELECT 1 FROM cc_discord_links WHERE username=? COLLATE NOCASE AND discord_id=?",(username,interaction.user.id)).fetchone()
+                if not link:return await interaction.response.send_message("You can only check your own linked Minecraft username.",ephemeral=True)
+            row=next((x for x in tc.giveaway_eligibility(mod.db) if x["username"].casefold()==username.casefold()),None)
+            if not row:return await interaction.response.send_message("Minecraft username not found.",ephemeral=True)
+            icon={"eligible":"✅","pending":"⏳","ineligible":"🚫"}[row["status"]]
+            await interaction.response.send_message(
+                f"{icon} **{row['username']}** · {row['status'].title()}\n{row['reason']}\nMatches completed: {row['completed_matches']}/{row['assigned_matches']}",
+                ephemeral=True,
+            )
+
+        @gg.command(name="participants",description="Staff: list participant giveaway eligibility")
+        @mod.staff_only
+        async def giveaway_participants(interaction):
+            rows=tc.giveaway_eligibility(mod.db)
+            lines=[f"{'✅' if x['status']=='eligible' else '⏳' if x['status']=='pending' else '🚫'} **{x['username']}** · {x['team']} · {x['reason']}" for x in rows]
+            await interaction.response.send_message("\n".join(lines)[:1900] or "No participants.",ephemeral=True)
+
+        @gg.command(name="draw",description="Staff: draw the single Nitro Basic Wheel Spin winner")
+        @mod.staff_only
+        async def giveaway_draw_cmd(interaction):
+            rows=tc.giveaway_eligibility(mod.db)
+            pending=[x for x in rows if x["status"]=="pending"]
+            eligible=[x for x in rows if x["status"]=="eligible"]
+            if pending:return await interaction.response.send_message(f"Cannot draw yet: {len(pending)} participants still have assigned matches pending.",ephemeral=True)
+            if not eligible:return await interaction.response.send_message("There are no eligible participants.",ephemeral=True)
+            if mod.db.execute("SELECT 1 FROM cc_giveaway_draws LIMIT 1").fetchone():
+                return await interaction.response.send_message("A participant giveaway winner has already been drawn. Use the existing claim record; no reroll is allowed.",ephemeral=True)
+            winner=random.choice(eligible)
+            with mod.db:
+                cur=mod.db.execute("INSERT INTO cc_giveaway_draws(username,discord_id,eligible_count,drawn_by,created_at) VALUES(?,?,?,?,?)",
+                                   (winner["username"],winner["discord_id"],len(eligible),interaction.user.id,tc.now()))
+                tc.audit(mod.db,"giveaway_drawn",{"draw_id":cur.lastrowid,"username":winner["username"],"eligible_count":len(eligible)},interaction.user.id)
+            await interaction.response.send_message(
+                f"🎉 Participant giveaway winner: **{winner['username']}** — 1x Nitro Basic Wheel Spin. "
+                f"Drawn from {len(eligible)} eligible players. This is separate from the champion duo's 2x Nitro prize.",
+            )
+
+        @gg.command(name="claim",description="Claim the participant giveaway prize if you are the recorded winner")
+        async def giveaway_claim(interaction):
+            draw=mod.db.execute("SELECT * FROM cc_giveaway_draws ORDER BY id DESC LIMIT 1").fetchone()
+            if not draw:return await interaction.response.send_message("No participant giveaway winner has been drawn.",ephemeral=True)
+            link=mod.db.execute("SELECT username FROM cc_discord_links WHERE discord_id=?",(interaction.user.id,)).fetchone()
+            if not link or link["username"].casefold()!=draw["username"].casefold():
+                return await interaction.response.send_message("This Discord account is not linked to the recorded giveaway winner.",ephemeral=True)
+            if draw["claim_status"]!="unclaimed":
+                return await interaction.response.send_message(f"Prize claim status: {draw['claim_status']}.",ephemeral=True)
+            with mod.db:
+                mod.db.execute("UPDATE cc_giveaway_draws SET claim_status='claimed',claimed_by=?,claimed_at=? WHERE id=?",
+                               (interaction.user.id,tc.now(),draw["id"]))
+                tc.audit(mod.db,"giveaway_prize_claimed",{"draw_id":draw["id"],"username":draw["username"]},interaction.user.id)
+            await interaction.response.send_message("✅ Your Nitro Basic Wheel Spin claim has been recorded. Staff must confirm delivery separately.",ephemeral=True)
+
+        @gg.command(name="confirm_delivery",description="Staff: confirm the participant giveaway prize was actually delivered")
+        @mod.staff_only
+        async def giveaway_delivery(interaction):
+            draw=mod.db.execute("SELECT * FROM cc_giveaway_draws ORDER BY id DESC LIMIT 1").fetchone()
+            if not draw:return await interaction.response.send_message("No giveaway draw exists.",ephemeral=True)
+            if draw["claim_status"]!="claimed":return await interaction.response.send_message("The winner must claim the prize before delivery can be confirmed.",ephemeral=True)
+            with mod.db:
+                mod.db.execute("UPDATE cc_giveaway_draws SET claim_status='delivered',delivery_confirmed_by=?,delivery_confirmed_at=? WHERE id=?",
+                               (interaction.user.id,tc.now(),draw["id"]))
+                tc.audit(mod.db,"giveaway_delivery_confirmed",{"draw_id":draw["id"],"username":draw["username"]},interaction.user.id)
+            await interaction.response.send_message(f"✅ Delivery confirmed for **{draw['username']}**. The bot has not marked any prize delivered before this staff confirmation.",ephemeral=True)
+
+    # Small one-tournament award table (for the Hall of Fame panel).
+    awards=app_commands.Group(name="awards",description="Tournament MVP and special awards",guild_only=True)
+    bot.tree.add_command(awards)
+    @awards.command(name="mvp",description="Staff: award tournament MVP to a Minecraft username")
+    @app_commands.autocomplete(username=bind_autocomplete(player_ac,mod))
+    @mod.staff_only
+    async def award_mvp(interaction,username:str,reason:str):
+        if not mod.db.execute("SELECT 1 FROM cc_tournament_players WHERE username=? COLLATE NOCASE",(username,)).fetchone():
+            return await interaction.response.send_message("Minecraft username is not registered.",ephemeral=True)
+        with mod.db:
+            mod.db.execute("INSERT INTO cc_awards(award_key,username,description,awarded_by,created_at) VALUES('MVP',?,?,?,?) ON CONFLICT(award_key) DO UPDATE SET username=excluded.username,description=excluded.description,awarded_by=excluded.awarded_by,created_at=excluded.created_at",
+                           (username,reason,interaction.user.id,tc.now()))
+            tc.audit(mod.db,"award_recorded",{"award":"MVP","username":username,"reason":reason},interaction.user.id)
+        await interaction.response.send_message(f"🏅 MVP awarded to **{username}**. The award is saved for the Hall of Fame.",ephemeral=True)
+
+    @awards.command(name="list",description="View recorded tournament awards")
+    async def awards_list(interaction):
+        rows=mod.db.execute("SELECT * FROM cc_awards ORDER BY award_key").fetchall()
+        await interaction.response.send_message("\n".join(f"**{r['award_key']}** · {r['username']} · {r['description'] or ''}" for r in rows)[:1800] or "No awards recorded.",ephemeral=True)
+
     # The existing /match group remains the live match and betting interface.
     mg=bot.tree.get_command("match")
     if isinstance(mg,app_commands.Group):

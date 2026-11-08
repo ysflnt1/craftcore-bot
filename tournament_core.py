@@ -123,6 +123,11 @@ def delete_team(db,tid,actor=None):
     with db: db.execute("DELETE FROM cc_tournament_teams WHERE id=?",(tid,)); audit(db,"team_deleted",t,actor)
 
 def seed_initial_teams(db,actor=None):
+    current=teams(db)
+    present={t["name"].casefold() for t in current}
+    missing=sum(1 for n,_,_ in INITIAL if n.casefold() not in present)
+    if len(current)+missing>16:
+        raise ValueError("Initial seeding would exceed the fixed 16-team tournament; remove unrelated unassigned teams first.")
     added=0
     with db:
         for seed,(name,p1,p2) in enumerate(INITIAL,1):

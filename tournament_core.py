@@ -433,10 +433,17 @@ def reset_bracket(db,actor=None):
     with db:
         for key in KEYS:
             m=get_match(db,key)
-            if m["winner_team_id"] is not None: db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(key,"bracket_reset",actor,json.dumps(snapshot(m),sort_keys=True),"{}",now()))
+            draft_count=db.execute("SELECT COUNT(*) FROM cc_draft_selections WHERE match_key=?",(key,)).fetchone()[0]
+            if m["winner_team_id"] is not None or draft_count or m["legacy_match_id"]:
+                db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",
+                           (key,"bracket_reset",actor,json.dumps(snapshot(m),sort_keys=True),json.dumps({"draft_steps_removed":draft_count,"legacy_match_cancelled":bool(m["legacy_match_id"])}),now()))
+            if m["legacy_match_id"]:
+                _void_legacy_match(db,m["legacy_match_id"],"bracket_reset_refund")
+                db.execute("DELETE FROM draft WHERE match_id=?",(m["legacy_match_id"],))
+                db.execute("UPDATE cc_bracket_matches SET legacy_match_id=NULL WHERE match_key=?",(key,))
         db.execute("DELETE FROM cc_draft_selections")
         db.execute("UPDATE cc_bracket_matches SET winner_team_id=NULL,score_a=NULL,score_b=NULL,result_type=NULL,referee=NULL,forfeit_team_id=NULL,disqualified_team_id=NULL,status='waiting',updated_at=?",(now(),))
-        refresh(db); audit(db,"bracket_reset",{"teams_and_legacy_economy_preserved":True},actor)
+        refresh(db); audit(db,"bracket_reset",{"teams_preserved":True,"wagers_refunded":True,"legacy_history_preserved":True},actor)
 def history(db,key,limit=20):
     if key not in KEYS: raise ValueError("Unknown match ID.")
     return [dict(r) for r in db.execute("SELECT * FROM cc_match_history WHERE match_key=? ORDER BY id DESC LIMIT ?",(key,max(1,min(limit,50))))]

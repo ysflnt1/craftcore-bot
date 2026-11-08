@@ -132,11 +132,19 @@ def install(mod):
             ephemeral=True,
         )
 
-    # Replace the existing /balance callback.
-    balance_command = bot.tree.get_command("balance")
+    # Register the public balance command.
+    existing_balance = bot.tree.get_command("balance")
 
-    if balance_command:
-        balance_command.callback = public_balance
+    if existing_balance:
+        bot.tree.remove_command("balance")
+
+    bot.tree.add_command(
+        app_commands.Command(
+            name="balance",
+            description="Check your CraftCoin wallet",
+            callback=public_balance,
+        )
+    )
 
     async def show_balance(interaction):
         player = ensure_player(interaction.user.id)

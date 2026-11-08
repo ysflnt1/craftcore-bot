@@ -844,6 +844,13 @@ async def match_game(
         return await interaction.response.send_message("Match not found or already finished.", ephemeral=True)
     if score_a == score_b:
         return await interaction.response.send_message("Scores can't be tied. One team must win each game.", ephemeral=True)
+    disputed = db.execute(
+        """SELECT 1 FROM cc_match_disputes d
+           JOIN cc_bracket_matches b ON b.match_key=d.match_key
+           WHERE b.legacy_match_id=? AND d.status='open' LIMIT 1""", (match_id,)
+    ).fetchone()
+    if disputed:
+        return await interaction.response.send_message("This match is disputed. Staff must resolve the dispute before recording more games.", ephemeral=True)
     n = q1("SELECT COUNT(*) AS c FROM games WHERE match_id=?", (match_id,))["c"] + 1
     if n > len(GAME_STEPS):
         return await interaction.response.send_message("All games already recorded.", ephemeral=True)

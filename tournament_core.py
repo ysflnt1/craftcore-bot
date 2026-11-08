@@ -216,40 +216,65 @@ def delete_team(db,tid,actor=None):
         audit(db,"team_deleted",t,actor)
 
 def seed_initial_teams(db,actor=None):
+    flag=db.execute("SELECT value FROM cc_tournament_settings WHERE key='initial_roster_seeded'").fetchone()
+    if flag and flag["value"]=="1":
+        return 0
     current=teams(db)
     present={t["name"].casefold() for t in current}
     missing=sum(1 for n,_,_ in INITIAL if n.casefold() not in present)
     if len(current)+missing>16:
-        raise ValueError("Initial seeding would exceed the fixed 16-team tournament; remove unrelated unassigned teams first.")
+        raise ValueError("Initial seeding would exceed the fixed 16-team tournament; remove unrelated teams first.")
     added=0
     with db:
-        for seed,(name,p1,p2) in enumerate(INITIAL,1):
-            old=team(db,name)
+        used_slots={t["bracket_slot"] for t in current if t["bracket_slot"] is not None}
+        used_seeds={t["seed"] for t in current if t["seed"] is not None}
+        for slot,(team_name,p1,p2) in enumerate(INITIAL,1):
+            old=team(db,team_name)
             if old:
-                if (old["player1"],old["player2"])!=(p1,p2): raise ValueError(f"Existing '{name}' conflicts with the supplied roster; nothing was overwritten.")
-                if old["seed"] is None: db.execute("UPDATE cc_tournament_teams SET seed=? WHERE id=?",(seed,old["id"]))
+                if (old["player1"],old["player2"])!=(p1,p2):
+                    raise ValueError(f"Existing '{team_name}' conflicts with the supplied roster; nothing was overwritten.")
+                bracket_slot=old["bracket_slot"]
+                if bracket_slot is None:
+                    if slot in used_slots: raise ValueError(f"Bracket slot {slot} is already assigned.")
+                    db.execute("UPDATE cc_tournament_teams SET bracket_slot=? WHERE id=?",(slot,old["id"]))
+                    used_slots.add(slot)
+                if old["seed"] is None:
+                    display_seed=slot if slot not in used_seeds else next(x for x in range(1,17) if x not in used_seeds)
+                    db.execute("UPDATE cc_tournament_teams SET seed=? WHERE id=?",(display_seed,old["id"]))
+                    used_seeds.add(display_seed)
                 continue
-            if db.execute("SELECT 1 FROM cc_tournament_teams WHERE seed=?",(seed,)).fetchone(): raise ValueError(f"Seed {seed} is already assigned.")
+            bracket_slot=slot if slot not in used_slots else next((x for x in range(1,17) if x not in used_slots),None)
+            display_seed=slot if slot not in used_seeds else next((x for x in range(1,17) if x not in used_seeds),None)
+            if bracket_slot is None or display_seed is None:
+                raise ValueError("No bracket slot or display seed is available for the initial roster.")
             try:
-                cur=db.execute("INSERT INTO cc_tournament_teams(name,seed,created_at) VALUES(?,?,?)",(name,seed,now())); tid=cur.lastrowid
-                db.executemany("INSERT INTO cc_tournament_players(username,team_id,slot) VALUES(?,?,?)",((p1,tid,1),(p2,tid,2))); added+=1
-            except sqlite3.IntegrityError as e: raise ValueError(f"Could not register '{name}': duplicate team, player, or seed.") from e
+                cur=db.execute("INSERT INTO cc_tournament_teams(name,seed,bracket_slot,created_at) VALUES(?,?,?,?)",(team_name,display_seed,bracket_slot,now()))
+                tid=cur.lastrowid
+                db.executemany("INSERT INTO cc_tournament_players(username,team_id,slot) VALUES(?,?,?)",((p1,tid,1),(p2,tid,2)))
+                used_slots.add(bracket_slot);used_seeds.add(display_seed);added+=1
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"Could not register '{team_name}': duplicate team, player, seed or bracket slot.") from e
+        db.execute("INSERT INTO cc_tournament_settings(key,value) VALUES('initial_roster_seeded','1') ON CONFLICT(key) DO UPDATE SET value='1'")
         if added:audit(db,"initial_roster_seeded",{"added":added},actor)
     return added
 
 def initialise_bracket(db,actor=None):
-    ids={t["name"].casefold():t["id"] for t in teams(db)}
-    missing=[n for n,_,_ in INITIAL if n.casefold() not in ids]
-    if missing: raise ValueError("Missing initial teams: "+", ".join(missing))
+    rows=teams(db)
+    if len(rows)!=16:
+        raise ValueError(f"Exactly 16 teams are required to initialise the bracket; {len(rows)} are registered.")
+    by_slot={t["bracket_slot"]:t["id"] for t in rows if t["bracket_slot"] is not None}
+    missing=[x for x in range(1,17) if x not in by_slot]
+    if missing: raise ValueError("Missing fixed bracket slots: "+", ".join(map(str,missing)))
     n=db.execute("SELECT COUNT(*) FROM cc_bracket_matches").fetchone()[0]
     if n:
-        if n!=15: raise ValueError("A partial bracket exists; refusing to overwrite.")
+        if n!=15: raise ValueError("A partial bracket already exists; refusing to overwrite.")
         return False
     with db:
-        for key,stage,label,a,b,sa,sb in DEFS:
-            ta=ids[a.casefold()] if a else None; tb=ids[b.casefold()] if b else None
+        for index,(key,stage,label,a,b,sa,sb) in enumerate(DEFS):
+            ta=by_slot[2*index+1] if index<8 else None
+            tb=by_slot[2*index+2] if index<8 else None
             db.execute("INSERT INTO cc_bracket_matches(match_key,stage,label,team_a_id,team_b_id,source_a,source_b,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",(key,stage,label,ta,tb,sa,sb,"ready" if ta and tb else "waiting",now()))
-        audit(db,"bracket_initialised",{"matches":15},actor)
+        audit(db,"bracket_initialised",{"matches":15,"fixed_slots":True},actor)
     return True
 def get_match(db,key):
     r=db.execute("SELECT * FROM cc_bracket_matches WHERE match_key=?",(key,)).fetchone()

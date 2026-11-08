@@ -613,7 +613,7 @@ team = app_commands.Group(name="team", description="Manage duos", guild_only=Tru
 bot.tree.add_command(team)
 
 
-@team.command(name="create", description="Staff: create a duo (also registers the players)")
+@team.command(name="create_legacy", description="Staff: create a legacy Discord-member duo")
 @staff_only
 async def team_create(
     interaction: discord.Interaction,
@@ -640,7 +640,7 @@ async def team_create(
     )
 
 
-@team.command(name="delete", description="Staff: delete a duo (only if it has no matches)")
+@team.command(name="delete_legacy", description="Staff: delete a legacy Discord-member duo (only if it has no matches)")
 @staff_only
 @app_commands.autocomplete(name=team_ac)
 async def team_delete(interaction: discord.Interaction, name: str):
@@ -656,7 +656,7 @@ async def team_delete(interaction: discord.Interaction, name: str):
     await interaction.response.send_message(f"Deleted team **{t['name']}**.", ephemeral=True)
 
 
-@team.command(name="list", description="List all duos")
+@team.command(name="list_legacy", description="List legacy Discord-member duos")
 async def team_list(interaction: discord.Interaction):
     rows = q("SELECT * FROM teams ORDER BY name")
     if not rows:
@@ -1066,6 +1066,10 @@ async def on_ready():
 
 import public_betting
 public_betting.install(__import__("sys").modules["__main__"])
+
+# Additive Minecraft-username roster, fixed bracket, and tournament draft.
+import tournament_discord
+tournament_discord.install(__import__("sys").modules["__main__"])
 
 
 if __name__ == "__main__":

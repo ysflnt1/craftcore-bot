@@ -31,6 +31,8 @@ def team_name(db, tid):
 def bracket_embed(db):
     rows=tc.bracket(db)
     e=discord.Embed(title="🏆 CRAFTCORE 2v2 TOURNAMENT",description="16 teams · Single elimination · 15 matches",colour=discord.Colour.blurple())
+    if not rows:
+        e.description="The roster is registered but the bracket has not been initialised. Staff can use /tournament initialise."
     for stage in ("Round 1","Quarterfinals","Semifinals","Grand Final"):
         values=[]
         for m in rows:
@@ -152,10 +154,10 @@ def install(mod):
     tc.ensure_schema(mod.db)
     try:
         count=tc.seed_initial_teams(mod.db)
-        made=tc.initialise_bracket(mod.db)
-        log.info("Tournament initialised: %d initial teams added; bracket created=%s",count,made)
+        bracket_count=mod.db.execute("SELECT COUNT(*) FROM cc_bracket_matches").fetchone()[0]
+        log.info("Tournament roster ready: %d initial teams added; bracket matches already configured=%s. Staff initialise after any roster replacements.",count,bracket_count)
     except ValueError:
-        log.exception("Tournament roster/bracket conflict; staff must resolve it. Legacy bot remains available.")
+        log.exception("Tournament roster conflict; staff must resolve it. Legacy bot remains available.")
     bot=mod.bot
 
     # Add Minecraft roster commands to the existing /team group. Legacy

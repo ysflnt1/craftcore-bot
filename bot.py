@@ -803,6 +803,8 @@ async def match_draft(interaction: discord.Interaction, match_id: int, gamemode:
     m = get_match(match_id)
     if not m or m["status"] in ("done", "cancelled"):
         return await interaction.response.send_message("Match not found or already finished.", ephemeral=True)
+    if q1("SELECT 1 FROM cc_bracket_matches WHERE legacy_match_id=?",(match_id,)):
+        return await interaction.response.send_message("This is a tournament bracket match. Use /draft start so the saved tournament draft stays in sync.",ephemeral=True)
     used = {r["gamemode"] for r in q("SELECT gamemode FROM draft WHERE match_id=?", (match_id,))}
     step = len(used) + 1
     if step > len(DRAFT_ORDER):
@@ -829,6 +831,8 @@ async def match_undo_draft(interaction: discord.Interaction, match_id: int):
     m = get_match(match_id)
     if not m:
         return await interaction.response.send_message("Match not found.", ephemeral=True)
+    if q1("SELECT 1 FROM cc_bracket_matches WHERE legacy_match_id=?",(match_id,)):
+        return await interaction.response.send_message("This is a tournament bracket match. Use /draft undo.",ephemeral=True)
     if q1("SELECT 1 FROM games WHERE match_id=?", (match_id,)):
         return await interaction.response.send_message("Scores already recorded. Undo games first.", ephemeral=True)
     last = q1("SELECT MAX(step) AS s FROM draft WHERE match_id=?", (match_id,))["s"]
@@ -976,7 +980,10 @@ async def match_cancel(interaction: discord.Interaction, match_id: int):
             )
         db.execute("UPDATE matches SET status='cancelled' WHERE id=?", (match_id,))
     await refresh_pred_message(match_id)
-    await interaction.response.send_message("❌ Match cancelled and all wagers refunded.", ephemeral=True)
+    sync_bracket = getattr(__import__("sys").modules[__name__], "sync_tournament_bracket", None)
+    if sync_bracket:
+        await sync_bracket()
+    await interaction.response.send_message("❌ Match cancelled and all wagers refunded. If it was a bracket match, a fresh betting record was created for the same pairing.", ephemeral=True)
 
 
 @match.command(name="repost_result", description="Staff: post a finished match's result to the results channel again")

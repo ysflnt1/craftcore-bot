@@ -512,3 +512,62 @@ def draft_history(db,key,limit=20):
             if len(out)>=max(1,min(limit,50)):
                 break
     return out
+
+
+def team_stats(db):
+    rows=teams(db)
+    matches=bracket(db)
+    stage_order={"Round 1":0,"Quarterfinals":1,"Semifinals":2,"Grand Final":3}
+    base={"Round 1":9,"Quarterfinals":5,"Semifinals":3,"Grand Final":2}
+    eliminated={}
+    for t in rows:
+        losses=[m for m in matches if m["status"]=="completed" and t["id"] in (m["team_a_id"],m["team_b_id"]) and m["winner_team_id"]!=t["id"]]
+        if losses:
+            eliminated[t["id"]]=max(losses,key=lambda m:stage_order[m["stage"]])["stage"]
+    placement={}
+    gf=get_match(db,"GF")
+    if gf and gf["winner_team_id"] is not None:
+        placement[gf["winner_team_id"]]=1
+        loser=gf["team_b_id"] if gf["winner_team_id"]==gf["team_a_id"] else gf["team_a_id"]
+        placement[loser]=2
+    for stage in ("Semifinals","Quarterfinals","Round 1"):
+        group=[t for t in rows if eliminated.get(t["id"])==stage and t["id"] not in placement]
+        group.sort(key=lambda t:(t["seed"] or 99,t["name"].casefold()))
+        for index,t in enumerate(group):
+            placement[t["id"]]=base[stage]+index
+    out=[]
+    for t in rows:
+        played=[m for m in matches if m["status"]=="completed" and t["id"] in (m["team_a_id"],m["team_b_id"])]
+        wins=sum(1 for m in played if m["winner_team_id"]==t["id"])
+        out.append({**t,"matches_played":len(played),"wins":wins,"losses":len(played)-wins,
+                    "win_percent":round(100*wins/len(played),1) if played else 0.0,
+                    "placement":placement.get(t["id"])})
+    return sorted(out,key=lambda x:(x["placement"] is None,x["placement"] or 99,-x["wins"],x["name"].casefold()))
+
+def player_stats(db):
+    by_team={t["id"]:t for t in team_stats(db)}
+    output=[]
+    for p in db.execute("SELECT username,team_id FROM cc_tournament_players ORDER BY username"):
+        t=by_team[p["team_id"]]
+        output.append({"username":p["username"],"team_name":t["name"],"team_id":p["team_id"],
+                       "matches_played":t["matches_played"],"wins":t["wins"],"losses":t["losses"],
+                       "win_percent":t["win_percent"],"placement":t["placement"]})
+    return output
+
+def giveaway_eligibility(db):
+    output=[]
+    for t in teams(db):
+        assigned=db.execute("SELECT * FROM cc_bracket_matches WHERE team_a_id=? OR team_b_id=?",(t["id"],t["id"])).fetchall()
+        forfeit=[m for m in assigned if m["forfeit_team_id"]==t["id"] or m["disqualified_team_id"]==t["id"]]
+        incomplete=[m for m in assigned if m["status"]!="completed"]
+        status="ineligible" if forfeit else ("pending" if incomplete or not assigned else "eligible")
+        reason=("Team forfeited or was disqualified." if forfeit else
+                "Assigned matches are not all completed yet." if incomplete else
+                "No assigned matches have been completed yet." if not assigned else
+                "Played every assigned match.")
+        for username in (t["player1"],t["player2"]):
+            link=db.execute("SELECT discord_id FROM cc_discord_links WHERE username=? COLLATE NOCASE",(username,)).fetchone()
+            output.append({"username":username,"team":t["name"],"status":status,"reason":reason,
+                           "assigned_matches":len(assigned),"completed_matches":len(assigned)-len(incomplete),
+                           "discord_id":link["discord_id"] if link else None})
+    return output

@@ -339,7 +339,12 @@ def install(mod):
                 mod.db.execute("INSERT INTO cc_discord_links(username,discord_id,linked_by,linked_at) VALUES(?,?,?,?) ON CONFLICT(username) DO UPDATE SET discord_id=excluded.discord_id,linked_by=excluded.linked_by,linked_at=excluded.linked_at",(uname,member.id,interaction.user.id,tc.now()))
                 tc.audit(mod.db,"discord_wallet_linked",{"username":uname,"discord_id":member.id},interaction.user.id)
             wallet=mod.get_player(member.id)
-            await interaction.response.send_message(f"✅ Linked `{uname}` to {member.mention}. Existing wallet balance preserved: **{wallet['balance']}**.",ephemeral=True)
+            created=await mod.sync_tournament_bracket()
+            await interaction.response.send_message(
+                f"✅ Linked `{uname}` to {member.mention}. Existing wallet balance preserved: **{wallet['balance']}**. "
+                f"New bracket betting matches created: **{created}**.",
+                ephemeral=True,
+            )
         @pg.command(name="unlink",description="Staff: unlink a Minecraft player without deleting their wallet")
         @app_commands.autocomplete(minecraft_username=bind_autocomplete(player_ac,mod))
         @mod.staff_only

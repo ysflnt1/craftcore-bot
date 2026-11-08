@@ -380,12 +380,52 @@ def settle(mid, winner):
 
 
 async def finish_match(mid, winner, forfeit_team=None):
-    db.execute(
-        "UPDATE matches SET status='done', winner=?, forfeit_team=? WHERE id=?",
-        (winner, forfeit_team, mid),
-    )
-    db.commit()
-    stats = settle(mid, winner)
+    """Atomically record a match result and settle every outstanding wager once."""
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        match_data = get_match(mid)
+        if not match_data or match_data["status"] in ("done", "cancelled"):
+            raise ValueError("This match has already been completed or cancelled.")
+
+        bets = db.execute(
+            "SELECT * FROM bets WHERE match_id=? AND settled=0", (mid,)
+        ).fetchall()
+        paid = correct = 0
+        for bet in bets:
+            payout = 0
+            if bet["team_id"] == winner:
+                payout = bet["amount"] + int(round(bet["amount"] * WIN_MULT))
+                correct += 1
+                paid += payout
+                db.execute(
+                    "UPDATE players SET balance=balance+? WHERE user_id=?",
+                    (payout, bet["user_id"]),
+                )
+            db.execute(
+                "UPDATE bets SET settled=1,payout=? WHERE match_id=? AND user_id=? AND settled=0",
+                (payout, mid, bet["user_id"]),
+            )
+            balance = db.execute(
+                "SELECT balance FROM players WHERE user_id=?", (bet["user_id"],)
+            ).fetchone()
+            if balance:
+                db.execute(
+                    """INSERT INTO cc_coin_transactions
+                       (user_id,delta,balance_after,reason,match_id,created_at)
+                       VALUES(?,?,?,?,?,datetime('now'))""",
+                    (bet["user_id"], payout, balance["balance"],
+                     "bet_won_payout" if payout else "bet_lost", mid),
+                )
+        db.execute(
+            "UPDATE matches SET status='done',winner=?,forfeit_team=? WHERE id=?",
+            (winner, forfeit_team, mid),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    stats = (len(bets), correct, paid)
     posted = await post_result(mid, stats)
     await refresh_pred_message(mid)
     return stats, posted
@@ -863,14 +903,20 @@ async def match_cancel(interaction: discord.Interaction, match_id: int):
     m = get_match(match_id)
     if not m or m["status"] in ("done", "cancelled"):
         return await interaction.response.send_message("Match not found or already finished.", ephemeral=True)
-    for b in q("SELECT * FROM bets WHERE match_id=? AND settled=0", (match_id,)):
-        db.execute("UPDATE players SET balance=balance+? WHERE user_id=?", (b["amount"], b["user_id"]))
-        db.execute(
-            "UPDATE bets SET settled=1, payout=amount WHERE match_id=? AND user_id=?",
-            (match_id, b["user_id"]),
-        )
-    db.execute("UPDATE matches SET status='cancelled' WHERE id=?", (match_id,))
-    db.commit()
+    with db:
+        for b in q("SELECT * FROM bets WHERE match_id=? AND settled=0", (match_id,)):
+            db.execute("UPDATE players SET balance=balance+? WHERE user_id=?", (b["amount"], b["user_id"]))
+            balance = get_player(b["user_id"])
+            db.execute(
+                "UPDATE bets SET settled=1, payout=amount WHERE match_id=? AND user_id=? AND settled=0",
+                (match_id, b["user_id"]),
+            )
+            db.execute(
+                """INSERT INTO cc_coin_transactions(user_id,delta,balance_after,reason,match_id,created_at)
+                   VALUES(?,?,?,'bet_refund',?,datetime('now'))""",
+                (b["user_id"], b["amount"], balance["balance"] + b["amount"], match_id),
+            )
+        db.execute("UPDATE matches SET status='cancelled' WHERE id=?", (match_id,))
     await refresh_pred_message(match_id)
     await interaction.response.send_message("❌ Match cancelled and all wagers refunded.", ephemeral=True)
 
@@ -981,8 +1027,11 @@ async def _adjust(interaction, user, amount, mode):
         new = max(0, p["balance"] - amount)
     else:
         new = amount
-    db.execute("UPDATE players SET balance=? WHERE user_id=?", (new, user.id))
-    db.commit()
+    delta = new - p["balance"]
+    with db:
+        db.execute("UPDATE players SET balance=? WHERE user_id=?", (new, user.id))
+        import tournament_core
+        tournament_core.record_coin(db, user.id, delta, f"staff_{mode}", interaction.user.id)
     await interaction.response.send_message(
         f"{user.mention} now has **{new}** CraftCoins.", ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),

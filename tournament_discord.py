@@ -154,9 +154,11 @@ class ImportConfirm(OwnerConfirm):
     def __init__(self,mod,owner,payload):super().__init__(owner);self.mod,self.payload=mod,payload
     @discord.ui.button(label="Overwrite bracket progress",style=discord.ButtonStyle.danger)
     async def confirm(self,interaction,button):
-        try:tc.import_bracket(self.mod.db,self.payload,interaction.user.id)
+        try:
+            tc.import_bracket(self.mod.db,self.payload,interaction.user.id)
+            await self.mod.sync_tournament_bracket()
         except ValueError as ex:return await interaction.response.edit_message(content=f"Backup rejected: {ex}",view=None)
-        await interaction.response.edit_message(content="✅ Backup imported. Team and economy data preserved.",view=None)
+        await interaction.response.edit_message(content="✅ Backup imported. Affected live matches were rebuilt, team and economy data were preserved, and backup-overwrites of matches with wager history were blocked.",view=None)
     @discord.ui.button(label="Cancel",style=discord.ButtonStyle.secondary)
     async def cancel(self,interaction,button):await interaction.response.edit_message(content="Import cancelled.",view=None)
 

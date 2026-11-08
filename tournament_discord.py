@@ -327,7 +327,10 @@ def install(mod):
             if by_name and by_name["discord_id"]!=member.id:return await interaction.response.send_message(f"\`{uname}\` is already linked to a different Discord account.",ephemeral=True)
             if by_user and by_user["username"].casefold()!=uname.casefold():return await interaction.response.send_message(f"{member.mention} is already linked to \`{by_user['username']}\`.",ephemeral=True)
             with mod.db:
+                existed=mod.get_player(member.id)
                 mod.db.execute("INSERT OR IGNORE INTO players(user_id,balance) VALUES(?,?)",(member.id,mod.START_COINS))
+                if not existed:
+                    tc.record_coin(mod.db,member.id,mod.START_COINS,"starting_balance",interaction.user.id)
                 mod.db.execute("INSERT INTO cc_discord_links(username,discord_id,linked_by,linked_at) VALUES(?,?,?,?) ON CONFLICT(username) DO UPDATE SET discord_id=excluded.discord_id,linked_by=excluded.linked_by,linked_at=excluded.linked_at",(uname,member.id,interaction.user.id,tc.now()))
                 tc.audit(mod.db,"discord_wallet_linked",{"username":uname,"discord_id":member.id},interaction.user.id)
             wallet=mod.get_player(member.id)

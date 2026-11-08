@@ -58,6 +58,22 @@ def ensure_schema(db):
     CREATE TABLE IF NOT EXISTS cc_draft_selections(match_key TEXT NOT NULL REFERENCES cc_bracket_matches(match_key) ON DELETE CASCADE,step INTEGER NOT NULL CHECK(step BETWEEN 1 AND 9),action TEXT NOT NULL,side TEXT,team_id INTEGER REFERENCES cc_tournament_teams(id),gamemode TEXT NOT NULL,actor_id INTEGER,created_at TEXT NOT NULL,PRIMARY KEY(match_key,step),UNIQUE(match_key,gamemode));
     CREATE TABLE IF NOT EXISTS cc_tournament_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS cc_audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT,actor_id INTEGER,action TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS cc_coin_transactions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        delta INTEGER NOT NULL,
+        balance_after INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        actor_id INTEGER,
+        match_id INTEGER,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cc_wallet_controls(
+        user_id INTEGER PRIMARY KEY,
+        frozen INTEGER NOT NULL DEFAULT 0 CHECK(frozen IN (0,1)),
+        updated_by INTEGER,
+        updated_at TEXT NOT NULL
+    );
     """)
     db.commit()
 
@@ -323,3 +339,24 @@ def import_bracket(db,raw,actor=None):
             db.execute("INSERT INTO cc_match_history(match_key,action,actor_id,old_data,new_data,created_at) VALUES(?,?,?,?,?,?)",(key,"backup_import",actor,json.dumps(snapshot(old),sort_keys=True),json.dumps(it,sort_keys=True),now()))
             db.execute("UPDATE cc_bracket_matches SET winner_team_id=?,score_a=?,score_b=?,result_type=?,referee=?,status=?,updated_at=? WHERE match_key=?",(it.get("winner_team_id"),it.get("score_a"),it.get("score_b"),it.get("result_type"),it.get("referee"),"completed" if it.get("winner_team_id") is not None else "ready",now(),key))
         refresh(db); audit(db,"bracket_backup_imported",{"matches":15},actor)
+
+def record_coin(db,user_id,delta,reason,actor=None,match_id=None):
+    player=db.execute("SELECT balance FROM players WHERE user_id=?",(user_id,)).fetchone()
+    if not player: raise ValueError("Wallet does not exist.")
+    db.execute("INSERT INTO cc_coin_transactions(user_id,delta,balance_after,reason,actor_id,match_id,created_at) VALUES(?,?,?,?,?,?,?)",
+        (user_id,int(delta),int(player["balance"]),reason,actor,match_id,now()))
+
+def coin_history(db,user_id,limit=20):
+    return [dict(r) for r in db.execute("SELECT * FROM cc_coin_transactions WHERE user_id=? ORDER BY id DESC LIMIT ?",(user_id,max(1,min(limit,50))) )]
+
+def wallet_frozen(db,user_id):
+    r=db.execute("SELECT frozen FROM cc_wallet_controls WHERE user_id=?",(user_id,)).fetchone()
+    return bool(r and r["frozen"])
+
+def set_wallet_frozen(db,user_id,frozen,actor=None):
+    if not db.execute("SELECT 1 FROM players WHERE user_id=?",(user_id,)).fetchone():
+        raise ValueError("Wallet does not exist.")
+    with db:
+        db.execute("INSERT INTO cc_wallet_controls(user_id,frozen,updated_by,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET frozen=excluded.frozen,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+            (user_id,1 if frozen else 0,actor,now()))
+        audit(db,"wallet_frozen" if frozen else "wallet_unfrozen",{"user_id":user_id},actor)

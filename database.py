@@ -86,8 +86,8 @@ class PostgresConnection:
             ) from exc
         self._psycopg = psycopg
         self._dict_row = dict_row
-        self._dsn = dsn
-        self._connection = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=15, autocommit=True)
+        self._dsn = dsn.replace("postgres://", "postgresql://", 1)
+        self._connection = psycopg.connect(self._dsn, row_factory=dict_row, connect_timeout=15, autocommit=True)
         self._last_rowcount = -1
         self._closed = False
 
@@ -284,6 +284,7 @@ class PostgresConnection:
         old.row_factory = sqlite3.Row
         total = 0
         try:
+            self.execute("BEGIN")
             with old:
                 for table in LEGACY_TABLES:
                     exists = old.execute(
@@ -327,10 +328,14 @@ class PostgresConnection:
             old.close()
 
     def commit(self):
-        self._connection.commit()
+        from psycopg.pq import TransactionStatus
+        if self._connection.info.transaction_status != TransactionStatus.IDLE:
+            self._connection.commit()
 
     def rollback(self):
-        self._connection.rollback()
+        from psycopg.pq import TransactionStatus
+        if self._connection.info.transaction_status != TransactionStatus.IDLE:
+            self._connection.rollback()
 
     def close(self):
         self._connection.close()

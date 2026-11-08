@@ -414,7 +414,7 @@ def set_result(db,key,winner,score_a=None,score_b=None,result_type="normal",refe
             else:
                 legacy_winner=db.execute("SELECT legacy_team_id FROM cc_tournament_teams WHERE id=?",(winner,)).fetchone()
                 if legacy_winner and legacy_winner["legacy_team_id"]:
-                    losing=forfeit_team if forfeit_team is not None else disqualified_team
+                    losing=forfeit_team
                     legacy_loser=db.execute("SELECT legacy_team_id FROM cc_tournament_teams WHERE id=?",(losing,)).fetchone() if losing is not None else None
                     _settle_legacy_match(db,m["legacy_match_id"],legacy_winner["legacy_team_id"],legacy_loser["legacy_team_id"] if legacy_loser else None)
         db.execute("UPDATE cc_bracket_matches SET winner_team_id=?,score_a=?,score_b=?,result_type=?,referee=?,forfeit_team_id=?,disqualified_team_id=?,status=?,updated_at=? WHERE match_key=?",(winner,score_a,score_b,result_type,referee,forfeit_team,disqualified_team,new["status"],now(),key))

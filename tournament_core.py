@@ -319,7 +319,7 @@ def refresh(db):
         top=db.execute("""SELECT COALESCE(l.username,'Discord ' || CAST(p.user_id AS TEXT)) AS username,
                           p.user_id AS discord_id,p.balance
                           FROM players p LEFT JOIN cc_discord_links l ON l.discord_id=p.user_id
-                          ORDER BY p.balance DESC,username COLLATE NOCASE LIMIT 1""").fetchone() if has_players else None
+                          ORDER BY p.balance DESC,LOWER(COALESCE(l.username,'Discord ' || CAST(p.user_id AS TEXT))) LIMIT 1""").fetchone() if has_players else None
         if top:
             previous=db.execute("SELECT status FROM cc_coin_rewards WHERE reward_key='highest_balance'").fetchone()
             if not previous or previous["status"]!="delivered":
